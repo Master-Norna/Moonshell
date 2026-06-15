@@ -187,6 +187,7 @@ class SpritePetWindow(QWidget):
         # second expression batch
         "wink": "wink",
         "look_side": "look_side",
+        "look_side_flip": "look_side_flip",
         "write": "write",
         "yawn": "yawn",
         "teleport": "teleport",
@@ -407,6 +408,8 @@ class SpritePetWindow(QWidget):
         # pet can dash either direction.
         if "dash" in self.sprite_images:
             self.sprite_images["dash_flip"] = self._flip_h(self.sprite_images["dash"])
+        if "look_side" in self.sprite_images:
+            self.sprite_images["look_side_flip"] = self._flip_h(self.sprite_images["look_side"])
 
     @staticmethod
     def _flip_h(img: QImage) -> QImage:
@@ -438,29 +441,21 @@ class SpritePetWindow(QWidget):
         return left, top, right, bottom
 
     def _compute_content_extents(self) -> None:
-        """Tightest character box across every pose, so the visible sprite (not
-        the padded window) decides edge clamps and the bubble anchor."""
-        left = top = self.SPRITE_SIZE
-        right_margin = self.SPRITE_SIZE
-        for img in self.sprite_images.values():
-            ext = self._alpha_extents(img)
-            if ext is None:
-                continue
-            l, t, r, _b = ext
-            left = min(left, l)
-            top = min(top, t)
-            right_margin = min(right_margin, self.SPRITE_SIZE - 1 - r)
-        if left < self.SPRITE_SIZE:
-            self._content_left = left
-            self._content_right = right_margin
-            self._content_top = top
+        """Use the canonical body pose for edge clamps and bubble placement.
 
-        # Seat height comes from the canonical standing pose (idle): the gap from
-        # the feet to the bottom of the padded stage is dead space to cut.
+        Effect poses intentionally reach toward the canvas edges. Including them
+        here makes the ordinary idle body float away from the screen edge.
+        """
         idle = self.sprite_images.get("idle")
         idle_ext = self._alpha_extents(idle) if idle is not None else None
         if idle_ext is not None:
-            foot_edge = idle_ext[3] + 1  # one row below the lowest opaque pixel
+            left, top, right, bottom = idle_ext
+            self._content_left = left
+            self._content_right = self.SPRITE_SIZE - 1 - right
+            self._content_top = top
+
+            # The gap below idle's feet is transparent stage padding.
+            foot_edge = bottom + 1
             self._foot_inset = max(0, self.STAGE_SIZE - self.SPRITE_Y - foot_edge)
 
     def _configure_window(self) -> None:
@@ -1485,11 +1480,16 @@ class SpritePetWindow(QWidget):
                   and "look_side" in self.sprite_images):
                 # cursor coming in from a side -> turn the head and watch it
                 self.mood.curiosity = min(1.0, self.mood.curiosity + 0.2)
-                self._set_action("look_side", seconds=1.2)
+                self._set_action(self._side_glance_pose(cp.x(), center.x()), seconds=1.2)
             else:
                 self.mood.curiosity = min(1.0, self.mood.curiosity + 0.2)
                 self._set_action("curious", seconds=1.1)
         self._cursor_was_near = near
+
+    def _side_glance_pose(self, cursor_x: int, center_x: int) -> str:
+        if cursor_x < center_x and "look_side_flip" in self.sprite_images:
+            return "look_side_flip"
+        return "look_side"
 
     # ---------- voice ----------
     # A quiet, dreamy little moon spirit: soft, warm, unhurried, a touch sleepy.
@@ -1637,7 +1637,7 @@ class SpritePetWindow(QWidget):
         self._next_idle_gap = gap
 
     def _start_walk(self) -> bool:
-        min_x, max_x = self._x_bounds()
+        min_x, max_x = self._wander_x_bounds()
         if max_x <= min_x:
             return False
         target = random.randint(min_x, max_x)
@@ -1653,7 +1653,7 @@ class SpritePetWindow(QWidget):
 
     def _start_walk_toward(self, cursor_x: int) -> bool:
         """Amble so the pet ends up roughly under the cursor (clamped on-screen)."""
-        min_x, max_x = self._x_bounds()
+        min_x, max_x = self._wander_x_bounds()
         if max_x <= min_x:
             return False
         target = max(min_x, min(cursor_x - self.width() // 2, max_x))
@@ -1666,6 +1666,11 @@ class SpritePetWindow(QWidget):
         self._dashing = False
         self.walking = True
         return True
+
+    def _wander_x_bounds(self) -> tuple[int, int]:
+        """Keep autonomous movement out of the user-controlled parking zones."""
+        min_x, max_x = self._x_bounds()
+        return min_x + self.PARK_ZONE + 1, max_x - self.PARK_ZONE - 1
 
     def _step_walk(self) -> None:
         if self.walk_target_x is None or self.dragging or self.collapsed or not self.isVisible():

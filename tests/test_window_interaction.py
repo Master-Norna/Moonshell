@@ -203,6 +203,33 @@ class WindowInteractionTests(unittest.TestCase):
             w._was_parked = saved_was_parked
             w._snap_to_taskbar(initial=True)
 
+    def test_autonomous_walk_avoids_user_parking_zones(self) -> None:
+        w = self.window
+        min_x, max_x = w._x_bounds()
+        walk_min, walk_max = w._wander_x_bounds()
+        self.assertEqual(walk_min, min_x + w.PARK_ZONE + 1)
+        self.assertEqual(walk_max, max_x - w.PARK_ZONE - 1)
+
+        w.move((min_x + max_x) // 2, w.y())
+        self.assertTrue(w._start_walk_toward(max_x + w.width()))
+        self.assertEqual(w.walk_target_x, walk_max)
+        w.move(w.walk_target_x, w.y())
+        self.assertFalse(w._is_parked())
+        w._end_walk()
+
+    def test_edge_extents_use_idle_body_not_effects(self) -> None:
+        idle = self.window._alpha_extents(self.window.sprite_images["idle"])
+        self.assertIsNotNone(idle)
+        left, top, right, _bottom = idle
+        self.assertEqual(self.window._content_left, left)
+        self.assertEqual(self.window._content_top, top)
+        self.assertEqual(self.window._content_right, self.window.SPRITE_SIZE - 1 - right)
+
+    def test_side_glance_faces_cursor(self) -> None:
+        self.assertIn("look_side_flip", self.window.sprite_images)
+        self.assertEqual(self.window._side_glance_pose(10, 20), "look_side_flip")
+        self.assertEqual(self.window._side_glance_pose(30, 20), "look_side")
+
     def test_tray_menu_does_not_expose_monitoring_ui(self) -> None:
         labels = [
             action.text()
