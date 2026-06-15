@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Virtual environment / launcher state
+.venv/
+.deps-installed
+last-run.log
+
+# OS
+Thumbs.db
+desktop.ini
+
+# Assistant working notes (internal, not for publishing)
+memory/
+
+# Local art working files (source sheets / specs / staging) -- kept off the repo
+art_requests/
+assets/_incoming/
+docs/ART_SPEC.md
+docs/ART_WISHLIST.md
+docs/image*.png
