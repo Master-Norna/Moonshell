@@ -1,0 +1,15 @@
+# Normalize line endings so Windows checkouts stop warning on every git op.
+* text=auto
+
+# Source and docs live as LF everywhere.
+*.py text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.yml text eol=lf
+
+# Windows launchers must stay CRLF to run correctly.
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary assets.
+*.png binary
