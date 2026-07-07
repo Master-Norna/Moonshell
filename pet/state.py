@@ -51,7 +51,10 @@ class PetState:
                 json.dumps(asdict(self), ensure_ascii=False, indent=2), encoding="utf-8"
             )
             os.replace(temp_path, path)
-        except Exception:
+        except Exception as exc:
+            # Losing a save means the pet "forgets" this session -- keep running,
+            # but leave a trace so repeated failures are diagnosable.
+            logger.warning("Could not save pet state to %s: %s", path, exc)
             try:
                 temp_path.unlink(missing_ok=True)
             except Exception:

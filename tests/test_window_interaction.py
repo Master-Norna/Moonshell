@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -91,6 +93,53 @@ class WindowInteractionTests(unittest.TestCase):
         self.window.phys_timer.stop()
         self.window._snap_to_taskbar(initial=True)
 
+    def test_click_on_transparent_padding_does_not_grab(self) -> None:
+        point = QPoint(1, 1)
+        self.assertFalse(self.window._is_interactive_point(point))
+        before = self.window._pet_count
+        self.window.mousePressEvent(self._mouse_event(
+            QEvent.Type.MouseButtonPress,
+            point,
+            self.window.mapToGlobal(point),
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+        ))
+        self.assertFalse(self.window.dragging)
+        self.assertFalse(self.window.held)
+        self.assertEqual(self.window._pet_count, before)
+
+    def test_hit_test_alpha_scan_is_cached(self) -> None:
+        w = self.window
+        w._extents_cache.clear()
+        with patch.object(
+            SpritePetWindow, "_alpha_extents", wraps=SpritePetWindow._alpha_extents
+        ) as scan:
+            first = w._pose_extents("idle")
+            second = w._pose_extents("idle")
+        self.assertEqual(first, second)
+        self.assertEqual(scan.call_count, 1)
+
+    def test_static_frames_skip_repaint(self) -> None:
+        w = self.window
+        self._reset_resource_alert()
+        saved = (w.action.until, w.message, w.message_until, w._last_render_sig)
+        calls: list[int] = []
+        try:
+            w.action.until = 0.0
+            w.message = ""
+            w.message_until = 0.0
+            w._last_render_sig = None
+            with patch.object(w, "update", lambda: calls.append(1)):
+                w._update_if_dirty()  # first paint of this frame
+                w._update_if_dirty()  # nothing changed -> skipped
+                self.assertEqual(len(calls), 1)
+                w.message = "你好"
+                w.message_until = time.time() + 5.0
+                w._update_if_dirty()  # bubble appeared -> repaint
+                self.assertEqual(len(calls), 2)
+        finally:
+            w.action.until, w.message, w.message_until, w._last_render_sig = saved
+
     def test_sustained_high_memory_forces_visible_reaction(self) -> None:
         self._reset_resource_alert()
         self.window._memory_samples = 0
@@ -153,6 +202,29 @@ class WindowInteractionTests(unittest.TestCase):
         self.assertEqual(self.window._resource_alert_kind, "")
         self.assertEqual(self.window._resource_alert_until, 0.0)
 
+    def test_resource_state_escalates_to_more_important_pressure(self) -> None:
+        self._reset_resource_alert()
+        self.window._memory_samples = 5
+        self.window._on_telemetry(self._telemetry(cpu=20, mem=97))
+        self.assertEqual(self.window._resource_alert_kind, "memory")
+
+        self.window._vram_samples = 1
+        for _ in range(2):
+            self.window._on_telemetry(
+                self._telemetry(cpu=20, mem=97, gpu=70, vram=72, gpu_sampled=True)
+            )
+        self.assertEqual(self.window._resource_alert_kind, "vram")
+        self.assertEqual(self.window._resource_alert_pose, "surprised")
+
+    def test_vram_resource_state_recovers_if_gpu_sampling_disappears(self) -> None:
+        self._reset_resource_alert()
+        self.window._enter_resource_state("vram", "surprised", "嘿，这有点过火了！")
+        stale = self._telemetry(cpu=8, mem=40, gpu=88, vram=72, gpu_sampled=False)
+        for _ in range(8):
+            self.window._on_telemetry(stale)
+        self.assertFalse(self.window._resource_busy)
+        self.assertEqual(self.window._resource_alert_kind, "")
+
     def test_night_only_beats_never_fire_in_daytime(self) -> None:
         w = self.window
         saved = (w._hour, w.mood.sleepiness, w.settings.activity)
@@ -202,6 +274,147 @@ class WindowInteractionTests(unittest.TestCase):
         finally:
             w._was_parked = saved_was_parked
             w._snap_to_taskbar(initial=True)
+
+    def test_idle_beat_does_not_chase_cursor_horizontally(self) -> None:
+        w = self.window
+        saved = (
+            w.settings.activity,
+            w.mood.energy,
+            w.mood.mood,
+            w.mood.curiosity,
+            w.mood.sleepiness,
+            w.mood.attention,
+            w.walking,
+            w.walk_target_x,
+        )
+        old_start_walk_toward = w._start_walk_toward
+        try:
+            w.settings.activity = "high"
+            w.mood.energy = 0.0
+            w.mood.mood = 0.6
+            w.mood.curiosity = 1.0
+            w.mood.sleepiness = 0.0
+            w.mood.attention = 1.0
+            w.walking = False
+            w.walk_target_x = None
+
+            def fail_if_called(cursor_x: int) -> bool:
+                raise AssertionError("idle beats must not target the cursor for walking")
+
+            w._start_walk_toward = fail_if_called  # type: ignore[method-assign]
+            with patch("pet.pet_window.random.random", return_value=0.0):
+                w._begin_idle_beat(0.0)
+        finally:
+            (
+                w.settings.activity,
+                w.mood.energy,
+                w.mood.mood,
+                w.mood.curiosity,
+                w.mood.sleepiness,
+                w.mood.attention,
+                w.walking,
+                w.walk_target_x,
+            ) = saved
+            w._start_walk_toward = old_start_walk_toward  # type: ignore[method-assign]
+
+    def test_high_energy_long_stroll_can_become_a_dash(self) -> None:
+        w = self.window
+        saved_energy = w.mood.energy
+        try:
+            w._snap_to_taskbar(initial=True)
+            min_x, max_x = w._wander_x_bounds()
+            w.move(min_x, w.y())
+            w.mood.energy = 1.0
+            with patch("pet.pet_window.random.randint", return_value=max_x), \
+                 patch("pet.pet_window.random.random", return_value=0.0):
+                self.assertTrue(w._start_walk())
+            self.assertTrue(w._dashing)
+            w._end_walk()
+
+            w.move(min_x, w.y())
+            w.mood.energy = 0.2  # calm strolls never dash
+            with patch("pet.pet_window.random.randint", return_value=max_x), \
+                 patch("pet.pet_window.random.random", return_value=0.0):
+                self.assertTrue(w._start_walk())
+            self.assertFalse(w._dashing)
+            w._end_walk()
+        finally:
+            w.mood.energy = saved_energy
+            w._snap_to_taskbar(initial=True)
+
+    def test_teleport_blinks_across_the_taskbar(self) -> None:
+        w = self.window
+        try:
+            w._snap_to_taskbar(initial=True)
+            min_x, max_x = w._wander_x_bounds()
+            w.move(min_x, w.y())
+            with patch("pet.pet_window.random.randint", return_value=max_x), \
+                 patch("pet.pet_window.random.random", return_value=0.9):
+                self.assertTrue(w._start_teleport())
+            self.assertEqual(w.action.name, "teleport")
+            self.assertEqual(w._teleport_target, max_x)
+            w._finish_teleport()
+            self.assertEqual(w.x(), max_x)
+            self.assertIsNone(w._teleport_target)
+
+            # a hop too short to be worth the spell is refused
+            w.move(max_x, w.y())
+            with patch("pet.pet_window.random.randint", return_value=max_x - 60):
+                self.assertFalse(w._start_teleport())
+        finally:
+            w.action.until = 0.0
+            w._snap_to_taskbar(initial=True)
+
+    def test_teleport_aborts_if_grabbed_mid_spell(self) -> None:
+        w = self.window
+        try:
+            w._snap_to_taskbar(initial=True)
+            start_x = w.x()
+            w._teleport_target = start_x + 500
+            w.held = True
+            w._finish_teleport()
+            self.assertEqual(w.x(), start_x)
+            self.assertIsNone(w._teleport_target)
+        finally:
+            w.held = False
+            w.action.until = 0.0
+            w._snap_to_taskbar(initial=True)
+
+    def test_fast_cursor_rush_startles_it_into_hiding(self) -> None:
+        w = self.window
+        saved = (w._cursor_was_near, w._last_glance, w._cursor_speed,
+                 w.mood.sleepiness, w.action.until)
+        try:
+            w.action.until = 0.0
+            w._cursor_was_near = False
+            w._last_glance = 0.0
+            w._cursor_speed = 2000.0
+            w.mood.sleepiness = 0.0
+            center = w.geometry().center()
+            with patch("pet.pet_window.QCursor") as cursor_cls, \
+                 patch("pet.pet_window.random.random", return_value=0.0):
+                cursor_cls.pos.return_value = center
+                w._maybe_notice_cursor(time.time())
+            self.assertEqual(w.action.name, "hide")
+        finally:
+            (w._cursor_was_near, w._last_glance, w._cursor_speed,
+             w.mood.sleepiness, w.action.until) = saved
+
+    def test_first_pat_of_the_day_offers_a_gift(self) -> None:
+        w = self.window
+        saved = (w._gift_day, w._pet_count, w._last_pet_t, w.action.until)
+        try:
+            w._gift_day = -1
+            w._pet_count = 0
+            w._last_pet_t = 0.0
+            w._on_pet()
+            self.assertEqual(w.action.name, "gift")
+            self.assertEqual(w._gift_day, time.localtime().tm_yday)
+
+            w._on_pet()  # second pat, same day -> back to the normal pat ladder
+            self.assertNotEqual(w.action.name, "gift")
+        finally:
+            (w._gift_day, w._pet_count, w._last_pet_t, w.action.until) = saved
 
     def test_autonomous_walk_avoids_user_parking_zones(self) -> None:
         w = self.window
@@ -289,6 +502,7 @@ class WindowInteractionTests(unittest.TestCase):
         self.window._resource_busy = False
         self.window._resource_recovery_samples = 0
         self.window._resource_message_active = False
+        self.window._vram_stale_samples = 0
 
     def _character_point(self) -> QPoint:
         dpr = self.window._current_dpr()

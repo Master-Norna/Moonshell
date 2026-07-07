@@ -237,6 +237,9 @@ class SpritePetWindow(QWidget):
         self.drag_start_global = QPoint()
         self.debug_bounds = False
         self._last_bubble_rect: Optional[QRect] = None
+        self._last_render_sig: Optional[tuple] = None
+        self._extents_cache: dict[str, Optional[tuple[int, int, int, int]]] = {}
+        self._click_through: Optional[bool] = None
 
         # autonomous strolling along the taskbar
         self.walking = False
@@ -268,8 +271,11 @@ class SpritePetWindow(QWidget):
         # cursor attentiveness + petting
         self._cursor_was_near = False
         self._last_glance = 0.0
+        self._cursor_speed = 0.0       # px/s, how fast the cursor moved last tick
         self._last_pet_t = 0.0
         self._pet_count = 0
+        self._gift_day = -1            # tm_yday of the last "first pat" gift
+        self._teleport_target: Optional[int] = None
 
         # ----- the "living companion" brain -----
         self.mood = Mood()
@@ -318,6 +324,7 @@ class SpritePetWindow(QWidget):
         self._resource_busy = False
         self._resource_recovery_samples = 0
         self._resource_message_active = False
+        self._vram_stale_samples = 0
 
         self.profile = self._profile_for_mode(self.settings.size_mode)
 
@@ -468,6 +475,9 @@ class SpritePetWindow(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.setMouseTracking(True)
+        # setWindowFlags recreates the native window, dropping any extended
+        # style we applied -- forget the cached state so it gets re-applied.
+        self._click_through = None
         self._disable_dwm_frame()
 
     def _disable_dwm_frame(self) -> None:
@@ -839,6 +849,23 @@ class SpritePetWindow(QWidget):
 
         painter.end()
 
+    def _render_signature(self) -> tuple:
+        """Everything the next paint depends on. If this hasn't changed since the
+        last animation tick, repainting would redraw identical pixels."""
+        bubble = self.message if (self.message and time.time() <= self.message_until) else ""
+        return (*self._current_render_spec(), bubble, self.debug_bounds)
+
+    def _update_if_dirty(self) -> None:
+        """Repaint only when the visible frame actually changed.
+
+        The animation timer ticks ~7x/s for the pet's whole lifetime; during a
+        held pose or between breath steps the frame is often identical, and for
+        an always-running app those skipped repaints are real CPU saved."""
+        sig = self._render_signature()
+        if sig != self._last_render_sig:
+            self._last_render_sig = sig
+            self.update()
+
     def _gait_phase(self) -> float:
         """0..1 position within one 2-frame walk cycle, keyed to distance walked."""
         stride = max(1.0, self.WALK_STRIDE_PX * self.profile.physical_scale)
@@ -1030,6 +1057,16 @@ class SpritePetWindow(QWidget):
             painter.setPen(QPen(QColor(255, 255, 255, 200), 1))
             painter.drawRect(bubble_rect)
 
+    def _pose_extents(self, name: str) -> Optional[tuple[int, int, int, int]]:
+        """Alpha bbox of a pose, cached -- the per-pixel scan is pure Python and
+        far too slow to repeat on every hit test."""
+        if name not in self._extents_cache:
+            image = self.sprite_images.get(name)
+            self._extents_cache[name] = (
+                self._alpha_extents(image) if image is not None else None
+            )
+        return self._extents_cache[name]
+
     def _is_interactive_point(self, point: QPoint) -> bool:
         """Only the visible pet and speech bubble should consume desktop input."""
         now = time.time()
@@ -1050,8 +1087,7 @@ class SpritePetWindow(QWidget):
         stage_x = (self.width() - stage_size) / 2.0
         stage_y = self.profile.ground_y - stage_size + self._foot_inset * scale
         name, src_x_offset, src_y_offset = self._current_render_spec()
-        image = self.sprite_images.get(name) or self.sprite_images["idle"]
-        extents = self._alpha_extents(image)
+        extents = self._pose_extents(name if name in self.sprite_images else "idle")
         if extents is None:
             return False
         left, top, right, bottom = extents
@@ -1064,6 +1100,43 @@ class SpritePetWindow(QWidget):
         hit_right = stage_x + (self.SPRITE_X + src_x_offset + right + 1 + grab_pad) * scale
         hit_bottom = stage_y + (self.SPRITE_Y + src_y_offset + bottom + 1 + grab_pad) * scale
         return hit_left <= point.x() < hit_right and hit_top <= point.y() < hit_bottom
+
+    def _update_click_through(self) -> None:
+        """Let mouse input fall through the window's transparent padding.
+
+        The window is much larger than the drawn character, and Qt's translucent
+        windows still swallow clicks on their fully transparent areas -- so the
+        invisible padding used to block clicks meant for whatever sits under it.
+        Toggled from the animation tick: the window turns solid again within one
+        tick (~140ms) of the cursor reaching the sprite or the speech bubble.
+        """
+        if sys.platform != "win32":
+            return
+        if self.held or self.dragging or self.falling:
+            interactive = True  # never go transparent mid-grab / mid-flight
+        else:
+            interactive = self._is_interactive_point(self.mapFromGlobal(QCursor.pos()))
+        self._apply_click_through(not interactive)
+
+    def _apply_click_through(self, enabled: bool) -> None:
+        if enabled == self._click_through:
+            return
+        try:
+            hwnd = ctypes.c_void_p(int(self.winId()))
+            user32 = ctypes.windll.user32
+            user32.GetWindowLongPtrW.restype = ctypes.c_ssize_t
+            user32.GetWindowLongPtrW.argtypes = [ctypes.c_void_p, ctypes.c_int]
+            user32.SetWindowLongPtrW.restype = ctypes.c_ssize_t
+            user32.SetWindowLongPtrW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_ssize_t]
+            GWL_EXSTYLE = -20
+            WS_EX_TRANSPARENT = 0x20
+            style = user32.GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
+            new_style = style | WS_EX_TRANSPARENT if enabled else style & ~WS_EX_TRANSPARENT
+            if new_style != style:
+                user32.SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_style)
+            self._click_through = enabled
+        except Exception:
+            pass
 
     def _wrap_cn(self, text: str, max_chars: int = 12) -> list[str]:
         text = text.strip()
@@ -1205,12 +1278,13 @@ class SpritePetWindow(QWidget):
             candidates.append((1, "memory", "notify", "唔…有点挤呢。"))
         if self._busy_samples >= 4:
             candidates.append((2, "load", "surprised", "呼…忙得有点喘了。"))
-        if self._vram_samples >= 2:
+        if self._vram_samples >= 2 and t.gpu_sampled:
             candidates.append((3, "vram", "surprised", "呼…有点忙不过来了。"))
 
-        if not self._resource_busy and candidates:
-            _, kind, pose, text = max(candidates)
-            self._enter_resource_state(kind, pose, text)
+        if candidates:
+            priority, kind, pose, text = max(candidates)
+            if not self._resource_busy or priority > self._resource_alert_priority:
+                self._enter_resource_state(kind, pose, text)
 
         if self._resource_alert_kind == "memory":
             recovered = t.mem < 90
@@ -1219,7 +1293,14 @@ class SpritePetWindow(QWidget):
         elif self._resource_alert_kind == "vram":
             # Allocated VRAM can remain high after work stops. Recovery is based
             # on fresh compute activity, not whether an app releases its cache.
-            recovered = bool(t.gpu_sampled and (t.gpu is None or t.gpu < 25))
+            # If fresh GPU sampling disappears, don't let stale readings block
+            # future reactions forever.
+            if t.gpu_sampled:
+                self._vram_stale_samples = 0
+                recovered = t.gpu is None or t.gpu < 25
+            else:
+                self._vram_stale_samples += 1
+                recovered = self._vram_stale_samples >= 6 and t.cpu < 60
         else:
             recovered = True
         if self._resource_busy and recovered:
@@ -1237,6 +1318,8 @@ class SpritePetWindow(QWidget):
         self._resource_alert_pose = pose
         self._resource_alert_text = text
         self._resource_alert_until = now + 4.0
+        self._resource_recovery_samples = 0
+        self._vram_stale_samples = 0
         self.walking = False
         self.walk_target_x = None
         self._resource_message_active = not self._quiet
@@ -1255,6 +1338,7 @@ class SpritePetWindow(QWidget):
         self._memory_samples = 0
         self._vram_samples = 0
         self._resource_recovery_samples = 0
+        self._vram_stale_samples = 0
         if self._resource_message_active and time.time() <= self.message_until:
             self.message = ""
             self.message_until = 0.0
@@ -1320,6 +1404,7 @@ class SpritePetWindow(QWidget):
         speed = math.hypot(cp.x() - self._cursor_pos.x(),
                            cp.y() - self._cursor_pos.y()) / max(dt, 1e-3)
         self._cursor_pos = cp
+        self._cursor_speed = speed
         active = self._idle_sec < 1.5
         if self._idle_sec > 240:       # a real break resets the "been here a while" clock
             self._active_streak = 0.0
@@ -1442,16 +1527,17 @@ class SpritePetWindow(QWidget):
             return
         now = time.time()
         self._update_brain(now)
+        self._update_click_through()
 
         # While picked up, thrown, or actively dragged, the physics loop / mouse
         # owns the position; just keep the dangle animation ticking.
         if self.held or self.falling or self.dragging:
-            self.update()
+            self._update_if_dirty()
             return
 
         if self.walking:
             self._step_walk()
-            self.update()
+            self._update_if_dirty()
             return
 
         busy = self.action.until > now
@@ -1462,7 +1548,7 @@ class SpritePetWindow(QWidget):
                     self._begin_idle_beat(now)
                 else:
                     self._maybe_notice_cursor(now)
-        self.update()
+        self._update_if_dirty()
 
     def _maybe_notice_cursor(self, now: float) -> None:
         """Perk up when the cursor approaches the sprite itself (not the window)."""
@@ -1473,7 +1559,14 @@ class SpritePetWindow(QWidget):
             self._last_glance = now
             self.last_idle_action = now  # don't immediately stack another beat
             self.mood.attention = min(1.0, self.mood.attention + 0.2)
-            if self.mood.sleepiness >= 0.78:
+            if (self._cursor_speed > 900 and "hide" in self.sprite_images
+                    and self.mood.sleepiness < 0.85 and random.random() < 0.7):
+                # the cursor rushed straight at it -> a startled duck-down; it
+                # peeks back out on its own once the beat passes
+                self.mood.energy = min(1.0, self.mood.energy + 0.05)
+                line = random.choice(("哇…吓我一跳。", "唔？！")) if random.random() < 0.5 else None
+                self._set_action("hide", 1.5, line)
+            elif self.mood.sleepiness >= 0.78:
                 # too sleepy to perk up -- just a drowsy half-peek, stays settled.
                 self._set_action("peek" if "peek" in self.sprite_images else "sleepy", 1.0)
             elif (abs(cp.x() - center.x()) > abs(cp.y() - center.y())
@@ -1555,13 +1648,16 @@ class SpritePetWindow(QWidget):
         # across your work -- low activity does the same globally.
         can_wander = self._lively and not self._is_parked()
         if not drowsy and can_wander:
-            if (m.curiosity > 0.55 and m.attention > 0.40
-                    and random.random() < 0.35
-                    and self._start_walk_toward(QCursor.pos().x())):
-                # bursting with energy -> it eagerly dashes over instead of ambling
-                self._dashing = (m.energy > 0.7 and "dash" in self.sprite_images
-                                 and random.random() < 0.6)
-                self._next_idle_gap = random.uniform(7.0, 13.0)
+            # Cursor attention is expressed through glances, not locomotion.  If
+            # movement targets the cursor, the pet appears to chase horizontal
+            # mouse motion instead of living on the desktop.
+            #
+            # Rarely -- a bit more often in high spirits or at night -- it skips
+            # walking altogether and blinks across the taskbar in a swirl of
+            # light.  Kept scarce so the spell stays a small delight.
+            tele_p = 0.05 + 0.10 * m.mood * m.energy + (0.08 if night else 0.0)
+            if random.random() < tele_p and self._start_teleport():
+                self._next_idle_gap = random.uniform(10.0, 18.0)
                 return
             walk_p = 0.5 * m.energy * (1.0 - m.sleepiness)
             if random.random() < walk_p and self._start_walk():
@@ -1647,9 +1743,50 @@ class SpritePetWindow(QWidget):
         self.walk_dir = 1 if target > self.x() else -1
         self._walk_dist = 0.0
         self._walk_pos_f = float(self.x())
-        self._dashing = False
+        # Bursting with energy, a long stroll sometimes becomes an eager little
+        # run -- the dash art in play again without ever chasing the cursor.
+        self._dashing = (
+            "dash" in self.sprite_images
+            and self.mood.energy > 0.7
+            and abs(target - self.x()) > 150
+            and random.random() < 0.35
+        )
         self.walking = True
         return True
+
+    def _start_teleport(self) -> bool:
+        """Blink across the taskbar in a swirl of light instead of walking.
+
+        A moon spirit doesn't always bother with feet: it vanishes here, and a
+        beat later reappears over there.  Rare, and only for hops long enough
+        that walking would be a trek."""
+        if "teleport" not in self.sprite_images:
+            return False
+        min_x, max_x = self._wander_x_bounds()
+        if max_x <= min_x:
+            return False
+        target = random.randint(min_x, max_x)
+        if abs(target - self.x()) < 140:  # short hop: walking reads better
+            return False
+        self._teleport_target = target
+        self._set_action("teleport", 1.0, force=True)  # vanish beat at the origin
+        QTimer.singleShot(520, self._finish_teleport)
+        return True
+
+    def _finish_teleport(self) -> None:
+        target, self._teleport_target = self._teleport_target, None
+        if target is None:
+            return
+        if self.held or self.dragging or self.falling or not self.isVisible():
+            return  # grabbed mid-spell -- stay where the hand put us
+        min_x, max_x = self._x_bounds()
+        self.move(max(min_x, min(target, max_x)), self._rest_y())
+        self._save_position()
+        line = random.choice(("……嗖。", "抄了个近道。")) if random.random() < 0.3 else None
+        self._set_action("teleport", 0.8, line, force=True)  # reappearance beat
+        self.last_idle_action = time.time()
+        self._was_parked = self._is_parked()
+        self.update()
 
     def _start_walk_toward(self, cursor_x: int) -> bool:
         """Amble so the pet ends up roughly under the cursor (clamped on-screen)."""
@@ -1781,7 +1918,13 @@ class SpritePetWindow(QWidget):
         self._last_pet_t = now
 
         secs = 1.1
-        if self._pet_count >= 6 and "twirl" in self.sprite_images:
+        today = time.localtime().tm_yday
+        if self._gift_day != today and "gift" in self.sprite_images:
+            # First pat of the day: it's been saving a little something for you.
+            self._gift_day = today
+            line, pose = random.choice(("给你留了个小东西。", "喏，这个送你。")), "gift"
+            secs = 2.4  # let the little reveal play out
+        elif self._pet_count >= 6 and "twirl" in self.sprite_images:
             line, pose = random.choice(("嘿嘿，转个圈！", "你最好啦～")), "twirl"
             secs = 2.2  # let the happy spin play out
         elif self._pet_count >= 4:
@@ -1812,10 +1955,17 @@ class SpritePetWindow(QWidget):
         super().leaveEvent(event)
 
     def _hover_ready(self) -> None:
+        # Only react when the cursor is actually on the character, not merely
+        # inside the window's transparent padding.
+        if not self._is_interactive_point(self.mapFromGlobal(QCursor.pos())):
+            return
         self.last_hover = time.time()
         self._set_action("curious", seconds=1.3, message=None)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # type: ignore[override]
+        if not self._is_interactive_point(event.position().toPoint()):
+            event.ignore()  # click landed on empty padding, not on the pet
+            return
         self.walking = False
         self.walk_target_x = None
         if event.button() == Qt.MouseButton.LeftButton:
@@ -1917,6 +2067,9 @@ class SpritePetWindow(QWidget):
         super().mouseReleaseEvent(event)
 
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:  # type: ignore[override]
+        if not self._is_interactive_point(event.position().toPoint()):
+            event.ignore()
+            return
         if event.button() == Qt.MouseButton.LeftButton:
             self.collapsed = not self.collapsed
             if "poof" in self.sprite_images:
