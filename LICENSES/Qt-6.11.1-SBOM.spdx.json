@@ -1,0 +1,992 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "MoonShell-Qt-6.11.1-runtime-notice-inventory",
+  "documentNamespace": "https://github.com/Master-Norna/Moonshell/sbom/qt-runtime-6.11.1-ac8b222b346e781b",
+  "creationInfo": {
+    "created": "2026-05-12T00:00:00Z",
+    "creators": [
+      "Tool: MoonShell-tools-build_qt_notices.py"
+    ],
+    "licenseListVersion": "3.27"
+  },
+  "documentDescribes": [
+    "SPDXRef-Package-extra-cmake-modules",
+    "SPDXRef-Package-kwin",
+    "SPDXRef-Package-android-native-style",
+    "SPDXRef-Package-blake2",
+    "SPDXRef-Package-d3d12memoryallocator",
+    "SPDXRef-Package-doubleconversion",
+    "SPDXRef-Package-easing",
+    "SPDXRef-Package-emoji-segmenter",
+    "SPDXRef-Package-forkfd",
+    "SPDXRef-Package-freetype",
+    "SPDXRef-Package-freetype-zlib",
+    "SPDXRef-Package-freetype-bdf",
+    "SPDXRef-Package-freetype-pcf",
+    "SPDXRef-Package-android-gradle-wrapper",
+    "SPDXRef-Package-harfbuzz-ng",
+    "SPDXRef-Package-icc-srgb-color-profile",
+    "SPDXRef-Package-libjpeg",
+    "SPDXRef-Package-libpng",
+    "SPDXRef-Package-psl-data",
+    "SPDXRef-Package-libpsl",
+    "SPDXRef-Package-md4",
+    "SPDXRef-Package-md4c",
+    "SPDXRef-Package-md5",
+    "SPDXRef-Package-pcre2",
+    "SPDXRef-Package-pcre2-sljit",
+    "SPDXRef-Package-pixman",
+    "SPDXRef-Package-rfc6234",
+    "SPDXRef-Package-sha1",
+    "SPDXRef-Package-sha3-endian",
+    "SPDXRef-Package-sha3-keccak",
+    "SPDXRef-Package-siphash",
+    "SPDXRef-Package-tinycbor",
+    "SPDXRef-Package-vulkanmemoryallocator",
+    "SPDXRef-Package-dejayvu",
+    "SPDXRef-Package-wintab",
+    "SPDXRef-Package-xcb-xinput",
+    "SPDXRef-Package-zlib",
+    "SPDXRef-Package-tlexpected",
+    "SPDXRef-Package-qeventdispatcher-cf",
+    "SPDXRef-Package-tika-mimetypes",
+    "SPDXRef-Package-unicode-character-database",
+    "SPDXRef-Package-unicode-cldr",
+    "SPDXRef-Package-opengl-headers",
+    "SPDXRef-Package-opengl-es2-headers",
+    "SPDXRef-Package-grayraster",
+    "SPDXRef-Package-smooth-scaling-algorithm",
+    "SPDXRef-Package-xserverhelper",
+    "SPDXRef-Package-rhi-miniengine-d3d12-mipmap",
+    "SPDXRef-Package-aglfn",
+    "SPDXRef-Package-vulkan-xml-spec",
+    "SPDXRef-Package-cocoa-platform-plugin",
+    "SPDXRef-Package-webgradients",
+    "SPDXRef-Package-mesa-llvmpipe-opengl32sw"
+  ],
+  "packages": [
+    {
+      "name": "extra-cmake-modules",
+      "SPDXID": "SPDXRef-Package-extra-cmake-modules",
+      "versionInfo": "5.84.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "copyrightText": "Copyright © 2011-2018 The KDE community",
+      "comment": "Used as part of the build system. Attribution metadata: cmake/3rdparty/extra-cmake-modules/qt_attribution.json. This is a conservative Qt module inventory.",
+      "homepage": "https://api.kde.org/ecm/"
+    },
+    {
+      "name": "KWin",
+      "SPDXID": "SPDXRef-Package-kwin",
+      "versionInfo": "5.13.4",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "copyrightText": "Copyright 2014 Alex Merry <alex.merry@kde.org>\nCopyright 2014 Martin Gräßlin <mgraesslin@kde.org>\nCopyright (c) 2006,2007 Laurent Montel, <montel@kde.org>",
+      "comment": "Used as part of the build system. Attribution metadata: cmake/3rdparty/kwin/qt_attribution.json. This is a conservative Qt module inventory.",
+      "homepage": "https://www.kde.org/"
+    },
+    {
+      "name": "Native Style for Android",
+      "SPDXID": "SPDXRef-Package-android-native-style",
+      "versionInfo": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "Copyright (C) 2005 The Android Open Source Project",
+      "comment": "Used in Android platform plugin. Attribution metadata: src/3rdparty/android/qt_attribution.json. This is a conservative Qt module inventory."
+    },
+    {
+      "name": "BLAKE2 (reference implementation)",
+      "SPDXID": "SPDXRef-Package-blake2",
+      "versionInfo": "ed1974ea83433eba7b2d95c5dcd9ac33cb847913",
+      "downloadLocation": "https://github.com/BLAKE2/BLAKE2/tree/ed1974ea83433eba7b2d95c5dcd9ac33cb847913",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "CC0-1.0 OR Apache-2.0",
+      "copyrightText": "Copyright 2012, Samuel Neves <sneves@dei.uc.pt>",
+      "comment": "Used in Qt Core (QCryptographicHash). Attribution metadata: src/3rdparty/blake2/qt_attribution.json. This is a conservative Qt module inventory.",
+      "homepage": "https://blake2.net/"
+    },
+    {
+      "name": "D3D12 Memory Allocator",
+      "SPDXID": "SPDXRef-Package-d3d12memoryallocator",
+      "versionInfo": "f128d39b7a95b4235bd228d231646278dc6c24b2",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "Copyright (c) 2019-2022 Advanced Micro Devices, Inc. All rights reserved.",
+      "comment": "Memory management for the D3D12 backend of QRhi. Attribution metadata: src/3rdparty/D3D12MemoryAllocator/qt_attribution.json. This is a conservative Qt module inventory.",
+      "homepage": "https://github.com/GPUOpen-LibrariesAndSDKs/D3D12MemoryAllocator"
+    },
+    {
+      "name": "Efficient Binary-Decimal and Decimal-Binary Conversion Routines for IEEE Doubles",
+      "SPDXID": "SPDXRef-Package-doubleconversion",
+      "versionInfo": "3.4.0",
+      "downloadLocation": "https://github.com/google/double-conversion/releases/tag/v3.4.0",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "copyrightText": "Copyright 2006-2012, the V8 project authors",
+      "comment": "Used in Qt Core. Configure with -system-doubleconversion or -no-doubleconversion to avoid. Attribution metadata: src/3rdparty/double-conversion/qt_attribution.json. This is a conservative Qt module inventory.",
+      "homepage": "https://github.com/google/double-conversion"
+    },
+    {
+      "name": "Easing Equations by Robert Penner",
+      "SPDXID": "SPDXRef-Package-easing",
+      "versionInfo": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "copyrightText": "Copyright (c) 2001 Robert Penner",
+      "comment": "Used in Qt Core (QEasingCurve). Attribution metadata: src/3rdparty/easing/qt_attribution.json. This is a conservative Qt module inventory.",
+      "homepage": "http://robertpenner.com/easing/"
+    },
+    {
+      "name": "Emoji Segmenter",
+      "SPDXID": "SPDXRef-Package-emoji-segmenter",
+      "versionInfo": "0.4.0",
+      "downloadLocation": "https://github.com/google/emoji-segmenter/releases/tag/0.4.0",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "Copyright 2019 Google LLC",
+      "comment": "Used in QtGui for parsing complex emoji sequences. Can be configured using the -emojisegmenter option. Attribution metadata: src/3rdparty/emoji-segmenter/qt_attribution.json. This is a conservative Qt module inventory.",
+      "homepage": "https://github.com/google/emoji-segmenter"
+    },
+    {
+      "name": "forkfd",
+      "SPDXID": "SPDXRef-Package-forkfd",
+      "versionInfo": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "Copyright (C) 2016 Intel Corporation\nCopyright (C) 2015 Klarälvdalens Datakonsult AB, a KDAB Group company, info@kdab.com",
+      "comment": "Used on most Unix platforms in Qt Core. Attribution metadata: src/3rdparty/forkfd/qt_attribution.json. This is a conservative Qt module inventory."
+    },
+    {
+      "name": "Freetype 2",
+      "SPDXID": "SPDXRef-Package-freetype",
+      "versionInfo": "2.14.3",
+      "downloadLocation": "https://download.savannah.gnu.org/releases/freetype/freetype-2.14.3.tar.gz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "FTL OR GPL-2.0-only",
+      "copyrightText": "Copyright (c) 2007-2014 Adobe Systems Incorporated\nCopyright (c) 2004-2026 Albert Chin-A-Young\nCopyright (c) 2018-2026 Armin Hasitzka, David Turner, Robert Wilhelm, and Werner Lemberg\nCopyright (c) 2000 Computing Research Labs, New Mexico State University\nCopyright (c) 1996-2026 David Turner, Robert Wilhelm, Dominik Röttsches, and Werner Lemberg\nCopyright (c) 2004-2026 David Turner, Robert Wilhelm, Werner Lemberg and George Williams\nCopyright (c) 2022-2026 David Turner, Robert Wilhelm, Werner Lemberg, and Moazin Khatti\nCopyright (c) 2008-2026 David Turner, Robert Wilhelm, Werner Lemberg, and suzuki toshiya\nCopyright (c) 2003-2026 David Turner, Robert Wilhelm, and Werner Lemberg\nCopyright (c) 2005-2026 David Turner\nCopyright (c) 2007-2026 Derek Clegg and Michael Toftdal\nCopyright (c) 2007 Dmitry Timoshkov for Codeweavers\nCopyright (c) 2001-2015 Francesco Zappa Nardelli\nCopyright (c) 2005, 2007, 2008, 2013 George Williams\nCopyright (c) 2013-2026 Google, Inc. Google Author(s) Behdad Esfahbod and Stuart Gill\nCopyright (c) 2013-2022 Google, Inc.\nCopyright (c) 2003 Huw D M Davies for Codeweavers\nCopyright (c) 2010-2026 Joel Klinghed\nCopyright (c) 1996-2026 Just van Rossum, David Turner, Robert Wilhelm, and Werner Lemberg\nCopyright (c) 2003-2026 Masatake YAMATO and Redhat K.K.\nCopyright (c) 2004-2026 Masatake YAMATO, Redhat K.K, David Turner, Robert Wilhelm, and Werner Lemberg\nCopyright (c) 2019-2026 Nikhil Ramakrishnan, David Turner, Robert Wilhelm, and Werner Lemberg\nCopyright (c) 2009-2026 Oran Agra and Mickey Gabel\nCopyright (c) 2007-2026 Rahul Bhalerao <rahul.bhalerao@redhat.com>\nCopyright (c) 2002-2026 Roberto Alameda\nCopyright (c) 2015-2026 Werner Lemberg\nCopyright (c) 2004-2026 suzuki toshiya, Masatake YAMATO, Red Hat K.K., David Turner, Robert Wilhelm, and Werner Lemberg\nCopyright (c) 2019 nyorain\nCopyright (c) 2022-2026 David Turner, Robert Wilhelm, Werner Lemberg, George Williams, and Dominik Röttsches\nCopyright (C) 2009, 2023  Red Hat, Inc.",
+      "comment": "Optionally used in Qt GUI and platform plugins. Configure with -no-freetype, or -system-freetype to avoid. Attribution metadata: src/3rdparty/freetype/qt_attribution.json. This is a conservative Qt module inventory.",
+      "homepage": "http://www.freetype.org"
+    },
+    {
+      "name": "Freetype 2 - zlib",
+      "SPDXID": "SPDXRef-Package-freetype-zlib",
+      "versionInfo": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Zlib",
+      "copyrightText": "Copyright (C) 1995-2024 Jean-loup Gailly and Mark Adler",
+      "comment": "Optionally used in Qt GUI and platform plugins. Configure with -no-freetype, or -system-freetype to avoid. Attribution metadata: src/3rdparty/freetype/qt_attribution.json. This is a conservative Qt module inventory.",
+      "homepage": "http://www.freetype.org"
+    },
+    {
+      "name": "Freetype 2 - Bitmap Distribution Format (BDF) support",
+      "SPDXID": "SPDXRef-Package-freetype-bdf",
+      "versionInfo": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "Copyright (c) 2000 Computing Research Labs, New Mexico State University\nCopyright (c) 2001-2014 Francesco Zappa Nardelli",
+      "comment": "Optionally used in Qt GUI and platform plugins. Configure with -no-freetype, or -system-freetype to avoid. Attribution metadata: src/3rdparty/freetype/qt_attribution.json. This is a conservative Qt module inventory.",
+      "homepage": "http://www.freetype.org"
+    },
+    {
+      "name": "Freetype 2 - Portable Compiled Format (PCF) support",
+      "SPDXID": "SPDXRef-Package-freetype-pcf",
+      "versionInfo": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT AND MIT-open-group",
+      "copyrightText": "Copyright (c) 2001, 2012 David Turner, Robert Wilhelm, and Werner Lemberg\nCopyright (c) 2000-2014 Francesco Zappa Nardelli\nCopyright (c) 1990, 1994, 1998 The Open Group",
+      "comment": "Optionally used in Qt GUI and platform plugins. Configure with -no-freetype, or -system-freetype to avoid. Attribution metadata: src/3rdparty/freetype/qt_attribution.json. This is a conservative Qt module inventory.",
+      "homepage": "http://www.freetype.org"
+    },
+    {
+      "name": "Gradle wrapper",
+      "SPDXID": "SPDXRef-Package-android-gradle-wrapper",
+      "versionInfo": "9.3.1",
+      "downloadLocation": "https://github.com/gradle/gradle/releases/tag/v9.3.1",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "Copyright (C) 2025 Gradle Inc.",
+      "comment": "Needed to create Android packages Attribution metadata: src/3rdparty/gradle/qt_attribution.json. This is a conservative Qt module inventory.",
+      "homepage": "https://gradle.org"
+    },
+    {
+      "name": "HarfBuzz-NG",
+      "SPDXID": "SPDXRef-Package-harfbuzz-ng",
+      "versionInfo": "14.2.0",
+      "downloadLocation": "https://github.com/harfbuzz/harfbuzz/releases/tag/14.2.0",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "Copyright © 2010-2022  Google, Inc.\nCopyright © 2015-2020  Ebrahim Byagowi\nCopyright © 2019,2020  Facebook, Inc.\nCopyright © 2012,2015  Mozilla Foundation\nCopyright © 2011  Codethink Limited\nCopyright © 2008,2010  Nokia Corporation and/or its subsidiary(-ies)\nCopyright © 2009  Keith Stribley\nCopyright © 2011  Martin Hosken and SIL International\nCopyright © 2007  Chris Wilson\nCopyright © 2005,2006,2020,2021,2022,2023  Behdad Esfahbod\nCopyright © 2004,2007,2008,2009,2010,2013,2021,2022,2023  Red Hat, Inc.\nCopyright © 1998-2005  David Turner and Werner Lemberg\nCopyright © 2016  Igalia S.L.\nCopyright © 2022  Matthias Clasen\nCopyright © 2018,2021  Khaled Hosny\nCopyright © 2018,2019,2020  Adobe, Inc\nCopyright © 2013-2015  Alexei Podtelezhnikov",
+      "comment": "Optionally used in Qt GUI. Configure with -system-harfbuzz to force the use of the system library, or -qt-harfbuzz to link statically to the library that is bundled with your Qt version. Attribution metadata: src/3rdparty/harfbuzz-ng/qt_attribution.json. This is a conservative Qt module inventory.",
+      "homepage": "http://harfbuzz.org"
+    },
+    {
+      "name": "sRGB color profile icc file",
+      "SPDXID": "SPDXRef-Package-icc-srgb-color-profile",
+      "versionInfo": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "LicenseRef-ICC-License",
+      "copyrightText": "Copyright International Color Consortium, 2015",
+      "comment": "Used in Qt Gui (Embedded into PDF/A-1b files generated by QPrinter/QPdfWriter). Attribution metadata: src/3rdparty/icc/qt_attribution.json. This is a conservative Qt module inventory.",
+      "homepage": "http://www.color.org/"
+    },
+    {
+      "name": "LibJPEG-turbo",
+      "SPDXID": "SPDXRef-Package-libjpeg",
+      "versionInfo": "3.1.4",
+      "downloadLocation": "https://github.com/libjpeg-turbo/libjpeg-turbo/releases/download/3.1.4/libjpeg-turbo-3.1.4.tar.gz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "IJG AND BSD-3-Clause",
+      "copyrightText": "NOASSERTION",
+      "comment": "Used in the qjpeg image plugin. Configure with -system-libjpeg or -no-libjpeg to avoid. Attribution metadata: src/3rdparty/libjpeg/qt_attribution.json. This is a conservative Qt module inventory.",
+      "homepage": "http://libjpeg-turbo.virtualgl.org/"
+    },
+    {
+      "name": "LibPNG",
+      "SPDXID": "SPDXRef-Package-libpng",
+      "versionInfo": "1.6.58",
+      "downloadLocation": "https://download.sourceforge.net/libpng/libpng-1.6.58.tar.xz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Libpng AND libpng-2.0",
+      "copyrightText": "Copyright (c) 1995-2026 The PNG Reference Library Authors\nCopyright (c) 2000-2026 Cosmin Truta\nCopyright (c) 1998-2018 Glenn Randers-Pehrson\nCopyright (c) 1996-1997 Andreas Dilger\nCopyright (c) 1995-1996 Guy Eric Schalnat, Group 42, Inc.\nCopyright (c) 2000-2017 Simon-Pierre Cadieux\nCopyright (c) 2000-2017 Eric S. Raymond\nCopyright (c) 2000-2017 Mans Rullgard\nCopyright (c) 2000-2017 Gilles Vollant\nCopyright (c) 2000-2017 James Yu\nCopyright (c) 2000-2017 Mandar Sahastrabuddhe\nCopyright (c) 1998-2000 Tom Lane\nCopyright (c) 1998-2000 Willem van Schaik\nCopyright (c) 1996-1997 John Bowler\nCopyright (c) 1996-1997 Kevin Bracey\nCopyright (c) 1996-1997 Sam Bushell\nCopyright (c) 1996-1997 Magnus Holmgren\nCopyright (c) 1996-1997 Greg Roelofs\nCopyright (c) 1996-1997 Tom Tanner\nCopyright (c) 1995-1996 Dave Martindale\nCopyright (c) 1995-1996 Paul Schmidt\nCopyright (c) 1995-1996 Tim Wegner",
+      "comment": "Used in the qpng image plugin. Configure with -system-libpng or -no-libpng to avoid. Attribution metadata: src/3rdparty/libpng/qt_attribution.json. This is a conservative Qt module inventory.",
+      "homepage": "http://www.libpng.org/pub/png/libpng.html"
+    },
+    {
+      "name": "The Public Suffix List",
+      "SPDXID": "SPDXRef-Package-psl-data",
+      "versionInfo": "2026-01-16_13-11-47_UTC",
+      "downloadLocation": "https://publicsuffix.org/list/public_suffix_list.dat",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MPL-2.0",
+      "copyrightText": "The list was originally provided by Jo Hermans <jo.hermans@gmail.com>.\nIt is now maintained on github (https://github.com/publicsuffix/list).",
+      "comment": "Used in Qt Network to avoid setting \"supercookies\" in the cookie jar\nsupported by Qt (by the QNetworkCookieJar class). Attribution metadata: src/3rdparty/libpsl/qt_attribution.json. This is a conservative Qt module inventory.",
+      "homepage": "http://publicsuffix.org/"
+    },
+    {
+      "name": "libpsl - C library to handle the Public Suffix List",
+      "SPDXID": "SPDXRef-Package-libpsl",
+      "versionInfo": "664f3dc85259ec65e30248a61fa1c45b7b0e4c3f",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "copyrightText": "Copyright 2014-2016 The Chromium Authors. All rights reserved.",
+      "comment": "Used to compress the embedded copy of publicsuffix list and\nto lookup entries in it. Attribution metadata: src/3rdparty/libpsl/qt_attribution.json. This is a conservative Qt module inventory.",
+      "homepage": "https://github.com/rockdaboot/libpsl"
+    },
+    {
+      "name": "MD4",
+      "SPDXID": "SPDXRef-Package-md4",
+      "versionInfo": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "CC0-1.0",
+      "copyrightText": "Written by Alexander Peslyak - better known as Solar Designer <solar@openwall.com> - in 2001, and placed in the public domain. There's absolutely no warranty.",
+      "comment": "Used in Qt Core (QCryptographicHash). Attribution metadata: src/3rdparty/md4/qt_attribution.json. This is a conservative Qt module inventory."
+    },
+    {
+      "name": "MD4C",
+      "SPDXID": "SPDXRef-Package-md4c",
+      "versionInfo": "0.5.2",
+      "downloadLocation": "https://github.com/mity/md4c/releases/tag/release-0.5.2",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "Copyright © 2016-2024 Martin Mitáš",
+      "comment": "Optionally used in QTextDocument if configured with textmarkdownreader. Attribution metadata: src/3rdparty/md4c/qt_attribution.json. This is a conservative Qt module inventory.",
+      "homepage": "https://github.com/mity/md4c"
+    },
+    {
+      "name": "MD5",
+      "SPDXID": "SPDXRef-Package-md5",
+      "versionInfo": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "CC0-1.0",
+      "copyrightText": "Written by Colin Plumb in 1993, no copyright is claimed. Ian Jackson <ian@chiark.greenend.org.uk>.",
+      "comment": "Used in Qt Core (QCryptographicHash). Attribution metadata: src/3rdparty/md5/qt_attribution.json. This is a conservative Qt module inventory."
+    },
+    {
+      "name": "PCRE2",
+      "SPDXID": "SPDXRef-Package-pcre2",
+      "versionInfo": "10.47",
+      "downloadLocation": "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.47/pcre2-10.47.tar.bz2",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "LicenseRef-BSD-3-Clause-with-PCRE2-Binary-Like-Packages-Exception",
+      "copyrightText": "Copyright (c) 1997-2007 University of Cambridge\nCopyright (c) 2007-2024 Philip Hazel\nCopyright (c) 2010-2024 Zoltan Herczeg",
+      "comment": "Used in Qt Core (QRegularExpression). Attribution metadata: src/3rdparty/pcre2/qt_attribution.json. This is a conservative Qt module inventory.",
+      "homepage": "http://www.pcre.org/"
+    },
+    {
+      "name": "PCRE2 - Stack-less Just-In-Time Compiler",
+      "SPDXID": "SPDXRef-Package-pcre2-sljit",
+      "versionInfo": "10.47",
+      "downloadLocation": "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.47/pcre2-10.47.tar.bz2",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-2-Clause",
+      "copyrightText": "Copyright Zoltan Herczeg",
+      "comment": "Used in Qt Core (QRegularExpression). Attribution metadata: src/3rdparty/pcre2/qt_attribution.json. This is a conservative Qt module inventory.",
+      "homepage": "http://www.pcre.org/"
+    },
+    {
+      "name": "Pixman",
+      "SPDXID": "SPDXRef-Package-pixman",
+      "versionInfo": "0.17.12",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "Copyright © 2009 Nokia Corporation",
+      "comment": "Used in Qt GUI on ARM NEON. Attribution metadata: src/3rdparty/pixman/qt_attribution.json. This is a conservative Qt module inventory.",
+      "homepage": "http://www.pixman.org/"
+    },
+    {
+      "name": "Secure Hash Algorithms SHA-384 and SHA-512",
+      "SPDXID": "SPDXRef-Package-rfc6234",
+      "versionInfo": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "copyrightText": "Copyright (c) 2011 IETF Trust and the persons identified as authors of the code.",
+      "comment": "Used in Qt Core (QCryptographicHash and QMessageAuthenticationCode) Attribution metadata: src/3rdparty/rfc6234/qt_attribution.json. This is a conservative Qt module inventory."
+    },
+    {
+      "name": "Secure Hash Algorithm SHA-1",
+      "SPDXID": "SPDXRef-Package-sha1",
+      "versionInfo": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "LicenseRef-SHA1-Public-Domain",
+      "copyrightText": "Copyright (C) Dominik Reichl <dominik.reichl@t-online.de>\nCopyright (C) 2016 The Qt Company Ltd",
+      "comment": "Used in Qt Core (QCryptographicHash). Attribution metadata: src/3rdparty/sha1/qt_attribution.json. This is a conservative Qt module inventory.",
+      "homepage": "http://www.dominik-reichl.de/projects/csha1/"
+    },
+    {
+      "name": "Secure Hash Algorithm SHA-3 - brg_endian",
+      "SPDXID": "SPDXRef-Package-sha3-endian",
+      "versionInfo": "1.0.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-2-Clause",
+      "copyrightText": "Copyright (c) 1998-2013, Brian Gladman, Worcester, UK. All rights reserved.",
+      "comment": "Used in Qt Core (QCryptographicHash). Attribution metadata: src/3rdparty/sha3/qt_attribution.json. This is a conservative Qt module inventory."
+    },
+    {
+      "name": "Secure Hash Algorithm SHA-3 - Keccak",
+      "SPDXID": "SPDXRef-Package-sha3-keccak",
+      "versionInfo": "3.2",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "CC0-1.0",
+      "copyrightText": "Guido Bertoni, Joan Daemen, Michaël Peeters and Gilles Van Assche.\nTo the extent possible under law, the implementers have waived all copyright\nand related or neighboring rights to the source code in this file.",
+      "comment": "Used in Qt Core (QCryptographicHash). Attribution metadata: src/3rdparty/sha3/qt_attribution.json. This is a conservative Qt module inventory."
+    },
+    {
+      "name": "SipHash Algorithm",
+      "SPDXID": "SPDXRef-Package-siphash",
+      "versionInfo": "NOASSERTION",
+      "downloadLocation": "https://raw.githubusercontent.com/veorq/SipHash/adcbf09b1684a718f594faa650ffc56bacdb0777/siphash24.c",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "CC0-1.0",
+      "copyrightText": "Copyright (C) 2012-2014 Jean-Philippe Aumasson\nCopyright (C) 2012-2014 Daniel J. Bernstein <djb@cr.yp.to>\nCopyright (C) 2016 Intel Corporation",
+      "comment": "Used in Qt Core (QHash) Attribution metadata: src/3rdparty/siphash/qt_attribution.json. This is a conservative Qt module inventory.",
+      "homepage": "https://131002.net/siphash/"
+    },
+    {
+      "name": "TinyCBOR",
+      "SPDXID": "SPDXRef-Package-tinycbor",
+      "versionInfo": "7.0",
+      "downloadLocation": "https://github.com/intel/tinycbor/archive/v7.0/tinycbor-7.0.tar.gz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "Copyright (C) 2015-2025 Intel Corporation",
+      "comment": "Used for QCborStreamReader and QCborStreamWriter. Attribution metadata: src/3rdparty/tinycbor/qt_attribution.json. This is a conservative Qt module inventory.",
+      "homepage": "https://github.com/intel/tinycbor"
+    },
+    {
+      "name": "Vulkan Memory Allocator",
+      "SPDXID": "SPDXRef-Package-vulkanmemoryallocator",
+      "versionInfo": "3.2.1",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "Copyright (c) 2017-2025 Advanced Micro Devices, Inc. All rights reserved.",
+      "comment": "Memory management for the Vulkan backend of QRhi. Attribution metadata: src/3rdparty/VulkanMemoryAllocator/qt_attribution.json. This is a conservative Qt module inventory.",
+      "homepage": "https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator"
+    },
+    {
+      "name": "DejaVu Fonts",
+      "SPDXID": "SPDXRef-Package-dejayvu",
+      "versionInfo": "2.37",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Bitstream-Vera",
+      "copyrightText": "Copyright (c) 2003 by Bitstream, Inc\nCopyright (c) 2006 by Tavmjong Bah\n(c) American Mathematical Society",
+      "comment": "Used for WebAssembly platform. Attribution metadata: src/3rdparty/wasm/qt_attribution.json. This is a conservative Qt module inventory.",
+      "homepage": "https://dejavu-fonts.github.io/"
+    },
+    {
+      "name": "Wintab API",
+      "SPDXID": "SPDXRef-Package-wintab",
+      "versionInfo": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "LicenseRef-Lcs-Telegraphics",
+      "copyrightText": "Copyright 1991-1998 by LCS/Telegraphics.",
+      "comment": "Used in the Qt platform plugin for Windows. Configure with -no-feature-tabletevent to avoid. Attribution metadata: src/3rdparty/wintab/qt_attribution.json. This is a conservative Qt module inventory."
+    },
+    {
+      "name": "XCB-XInput",
+      "SPDXID": "SPDXRef-Package-xcb-xinput",
+      "versionInfo": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "Copyright (C) 2001-2006 Bart Massey, Jamey Sharp, and Josh Triplett.\nCopyright (C) 2006 Peter Hutterer\nCopyright (C) 2013 Daniel Martin",
+      "comment": "Used in XCB platform plugin if xcb-xinput was not present on the system\n during Qt configuration or -bundled-xcb-xinput switch was used. To force using xcb-xinput from\n the system, pass -no-bundled-xcb-xinput. Attribution metadata: src/3rdparty/xcb/qt_attribution.json. This is a conservative Qt module inventory.",
+      "homepage": "https://xcb.freedesktop.org/"
+    },
+    {
+      "name": "Data Compression Library (zlib)",
+      "SPDXID": "SPDXRef-Package-zlib",
+      "versionInfo": "1.3.2",
+      "downloadLocation": "https://github.com/madler/zlib/releases/download/v1.3.2/zlib-1.3.2.tar.gz",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Zlib",
+      "copyrightText": "(C) 1995-2026 Jean-loup Gailly and Mark Adler",
+      "comment": "Optionally used in Qt Core and development tools. Configure with -system-zlib to avoid. Attribution metadata: src/3rdparty/zlib/qt_attribution.json. This is a conservative Qt module inventory.",
+      "homepage": "https://zlib.net/"
+    },
+    {
+      "name": "tl::expected",
+      "SPDXID": "SPDXRef-Package-tlexpected",
+      "versionInfo": "41d3e1f48d682992a2230b2a715bca38b848b269",
+      "downloadLocation": "https://github.com/TartanLlama/expected/blob/41d3e1f48d682992a2230b2a715bca38b848b269/include/tl/expected.hpp",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "CC0-1.0",
+      "copyrightText": "To the extent possible under law, Sy Brand has waived all copyright and related or neighboring rights to the expected library. This work is published from: United Kingdom.",
+      "comment": "Available as a private type in all Qt modules Attribution metadata: src/corelib/global/qt_attribution.json. This is a conservative Qt module inventory.",
+      "homepage": "https://github.com/TartanLlama/expected/"
+    },
+    {
+      "name": "QEventDispatcher on macOS",
+      "SPDXID": "SPDXRef-Package-qeventdispatcher-cf",
+      "versionInfo": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "copyrightText": "Copyright (c) 2007-2008, Apple, Inc.",
+      "comment": "Used in Qt Core on macOS. Attribution metadata: src/corelib/kernel/qt_attribution.json. This is a conservative Qt module inventory."
+    },
+    {
+      "name": "Apache Tika MimeType Definitions",
+      "SPDXID": "SPDXRef-Package-tika-mimetypes",
+      "versionInfo": "408c26e1e03e018a623e732dff6fb047a2fb8e19",
+      "downloadLocation": "https://github.com/apache/tika/blob/408c26e1e03e018a623e732dff6fb047a2fb8e19/tika-core/src/main/resources/org/apache/tika/mime/tika-mimetypes.xml",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "Copyright 2026 The Apache Software Foundation",
+      "comment": "Qt Core uses a copy of the Apache Tika MimeType Definitions if shared-mime-info isn't installed on the system. Attribution metadata: src/corelib/mimetypes/3rdparty/qt_attribution.json. This is a conservative Qt module inventory.",
+      "homepage": "https://github.com/apache/tika/tree/main/tika-core/src/main/resources/org/apache/tika/mime"
+    },
+    {
+      "name": "Unicode Character Database (UCD)",
+      "SPDXID": "SPDXRef-Package-unicode-character-database",
+      "versionInfo": "36",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Unicode-3.0",
+      "copyrightText": "Copyright (C) 1991-2025 Unicode, Inc.",
+      "comment": "Qt Core uses data obtained from UCD files for working with characters and strings. Attribution metadata: src/corelib/text/qt_attribution.json. This is a conservative Qt module inventory.",
+      "homepage": "https://www.unicode.org/ucd/"
+    },
+    {
+      "name": "Unicode Common Locale Data Repository (CLDR)",
+      "SPDXID": "SPDXRef-Package-unicode-cldr",
+      "versionInfo": "v48.1",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Unicode-3.0",
+      "copyrightText": "Copyright (C) 2004-2025 Unicode, Inc.",
+      "comment": "Used in Qt Core (QTimeZone, QLocale). Attribution metadata: src/corelib/text/qt_attribution.json. This is a conservative Qt module inventory.",
+      "homepage": "https://cldr.unicode.org/"
+    },
+    {
+      "name": "OpenGL Headers",
+      "SPDXID": "SPDXRef-Package-opengl-headers",
+      "versionInfo": "Revision 27684",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "Copyright (c) 2013-2014 The Khronos Group Inc.",
+      "comment": "Used on Windows and Linux in the OpenGL related headers of Qt GUI. Attribution metadata: src/gui/opengl/qt_attribution.json. This is a conservative Qt module inventory.",
+      "homepage": "https://www.khronos.org/"
+    },
+    {
+      "name": "OpenGL ES 2 Headers",
+      "SPDXID": "SPDXRef-Package-opengl-es2-headers",
+      "versionInfo": "Revision 27673",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "Copyright (c) 2013-2014 The Khronos Group Inc.",
+      "comment": "Used on Windows and Linux in the OpenGL related headers of Qt GUI. Attribution metadata: src/gui/opengl/qt_attribution.json. This is a conservative Qt module inventory.",
+      "homepage": "https://www.khronos.org/"
+    },
+    {
+      "name": "Anti-aliasing rasterizer from FreeType 2",
+      "SPDXID": "SPDXRef-Package-grayraster",
+      "versionInfo": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "FTL OR GPL-2.0-only",
+      "copyrightText": "Copyright 2000-2016 by David Turner, Robert Wilhelm, and Werner Lemberg.",
+      "comment": "Used in Qt GUI. Attribution metadata: src/gui/painting/qt_attribution.json. This is a conservative Qt module inventory.",
+      "homepage": "http://www.freetype.org"
+    },
+    {
+      "name": "Smooth Scaling Algorithm",
+      "SPDXID": "SPDXRef-Package-smooth-scaling-algorithm",
+      "versionInfo": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-2-Clause AND Imlib2",
+      "copyrightText": "Copyright (C) 2004, 2005 Daniel M. Duley.\n(C) Carsten Haitzler and various contributors.\n(C) Willem Monsuwe <willem@stack.nl>",
+      "comment": "Used in Qt Gui (QImage::transformed() functions). Attribution metadata: src/gui/painting/qt_attribution.json. This is a conservative Qt module inventory."
+    },
+    {
+      "name": "X Server helper",
+      "SPDXID": "SPDXRef-Package-xserverhelper",
+      "versionInfo": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "X11 AND HPND",
+      "copyrightText": "Copyright (c) 1987, 1988 X Consortium\nCopyright 1987, 1988 by Digital Equipment Corporation, Maynard, Massachusetts.",
+      "comment": "Used in Qt GUI (QRegion). Attribution metadata: src/gui/painting/qt_attribution.json. This is a conservative Qt module inventory.",
+      "homepage": "https://www.x.org/"
+    },
+    {
+      "name": "Mipmap generator for D3D12",
+      "SPDXID": "SPDXRef-Package-rhi-miniengine-d3d12-mipmap",
+      "versionInfo": "0aa79bad78992da0b6a8279ddb9002c1753cb849",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "Copyright (c) 2015 Microsoft",
+      "comment": "Compute shader for mipmap generation with Direct 3D 12 Attribution metadata: src/gui/rhi/qt_attribution.json. This is a conservative Qt module inventory.",
+      "homepage": "https://github.com/microsoft/DirectX-Graphics-Samples"
+    },
+    {
+      "name": "Adobe Glyph List For New Fonts",
+      "SPDXID": "SPDXRef-Package-aglfn",
+      "versionInfo": "1.7",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "copyrightText": "Copyright 2002, 2003, 2005, 2006, 2008, 2010, 2015 Adobe Systems",
+      "comment": "Used by PDF generator to make it easier for reader applications to resolve  the original contents of rendered text. Attribution metadata: src/gui/text/qt_attribution.json. This is a conservative Qt module inventory.",
+      "homepage": "https://github.com/adobe-type-tools/agl-aglfn"
+    },
+    {
+      "name": "Vulkan API Registry",
+      "SPDXID": "SPDXRef-Package-vulkan-xml-spec",
+      "versionInfo": "1.4.308",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "Apache-2.0 OR MIT",
+      "copyrightText": "Copyright (c) 2015-2025 The Khronos Group Inc.",
+      "comment": "Used to dynamically generate the sources for the QVulkan(Device)Functions classes. Attribution metadata: src/gui/vulkan/qt_attribution.json. This is a conservative Qt module inventory.",
+      "homepage": "https://www.khronos.org/"
+    },
+    {
+      "name": "Cocoa Platform Plugin",
+      "SPDXID": "SPDXRef-Package-cocoa-platform-plugin",
+      "versionInfo": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "BSD-3-Clause",
+      "copyrightText": "Copyright (c) 2007-2008, Apple, Inc.",
+      "comment": "Code used in the Qt Platform Abstraction (QPA) for macOS. Attribution metadata: src/plugins/platforms/cocoa/qt_attribution.json. This is a conservative Qt module inventory."
+    },
+    {
+      "name": "WebGradients",
+      "SPDXID": "SPDXRef-Package-webgradients",
+      "versionInfo": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "NOASSERTION",
+      "licenseDeclared": "MIT",
+      "copyrightText": "Copyright (c) 2017 itmeo",
+      "comment": "Used in Qt GUI to provide presets for QGradient. Attribution metadata: util/gradientgen/qt_attribution.json. This is a conservative Qt module inventory.",
+      "homepage": "https://webgradients.com/"
+    },
+    {
+      "name": "Mesa llvmpipe software OpenGL renderer",
+      "SPDXID": "SPDXRef-Package-mesa-llvmpipe-opengl32sw",
+      "versionInfo": "Mesa 11.2.2 / LLVM 3.6.2",
+      "downloadLocation": "https://doc.qt.io/qtcreator/qtcreator-binary-attribution-llvmpipe.html",
+      "filesAnalyzed": false,
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "4a7d90f91fdecb5df7b426bc2d05974b8d7ffa450af2d1f93f3eca05800718da"
+        }
+      ],
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "Copyright (C) 2003-2019 LLVM Team\nCopyright (C) 1999-2007 Brian Paul. All Rights Reserved.",
+      "homepage": "https://www.mesa3d.org/",
+      "comment": "Qt Windows software OpenGL fallback shipped as opengl32sw.dll. Version strings and checksum correspond to the PySide6-Essentials 6.11.1 Windows x64 wheel."
+    }
+  ],
+  "relationships": [
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-extra-cmake-modules"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-kwin"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-android-native-style"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-blake2"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-d3d12memoryallocator"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-doubleconversion"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-easing"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-emoji-segmenter"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-forkfd"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-freetype"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-freetype-zlib"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-freetype-bdf"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-freetype-pcf"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-android-gradle-wrapper"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-harfbuzz-ng"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-icc-srgb-color-profile"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-libjpeg"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-libpng"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-psl-data"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-libpsl"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-md4"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-md4c"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-md5"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-pcre2"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-pcre2-sljit"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-pixman"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-rfc6234"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-sha1"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-sha3-endian"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-sha3-keccak"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-siphash"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-tinycbor"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-vulkanmemoryallocator"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-dejayvu"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-wintab"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-xcb-xinput"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-zlib"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-tlexpected"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-qeventdispatcher-cf"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-tika-mimetypes"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-unicode-character-database"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-unicode-cldr"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-opengl-headers"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-opengl-es2-headers"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-grayraster"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-smooth-scaling-algorithm"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-xserverhelper"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-rhi-miniengine-d3d12-mipmap"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-aglfn"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-vulkan-xml-spec"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-cocoa-platform-plugin"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-webgradients"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-mesa-llvmpipe-opengl32sw"
+    }
+  ],
+  "hasExtractedLicensingInfos": [
+    {
+      "licenseId": "LicenseRef-BSD-3-Clause-with-PCRE2-Binary-Like-Packages-Exception",
+      "extractedText": "Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:\n\n    1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.\n    2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.\n    3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.\n\nTHIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS \"AS IS\" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.\n\nEXEMPTION FOR BINARY LIBRARY-LIKE PACKAGES\n------------------------------------------\n\nThe second condition in the BSD licence (covering binary redistributions) does not apply all the way down a chain of software. If binary package A includes PCRE2, it must respect the condition, but if package B is software that includes package A, the condition is not imposed on package B unless it uses PCRE2 independently.",
+      "name": "LicenseRef-BSD-3-Clause-with-PCRE2-Binary-Like-Packages-Exception"
+    },
+    {
+      "licenseId": "LicenseRef-ICC-License",
+      "extractedText": "For the file sRGB2014.icc:\n\nCopyright International Color Consortium, 2015\n\nThis profile is made available by the International Color Consortium, and may be copied,\ndistributed, embedded, made, used, and sold without restriction. Altered versions of this\nprofile shall have the original identification and copyright information removed and\nshall not be misrepresented as the original profile.\n\n(original source location: http://www.color.org/srgbprofiles.xalter)",
+      "name": "LicenseRef-ICC-License"
+    },
+    {
+      "licenseId": "LicenseRef-Lcs-Telegraphics",
+      "extractedText": "The text and information contained in this file may be freely used,\ncopied, or distributed without compensation or licensing restrictions.",
+      "name": "LicenseRef-Lcs-Telegraphics"
+    },
+    {
+      "licenseId": "LicenseRef-SHA1-Public-Domain",
+      "extractedText": "100% free public domain implementation of the SHA-1 algorithm\nby Dominik Reichl <dominik.reichl@t-online.de>\nWeb: http://www.dominik-reichl.de/",
+      "name": "LicenseRef-SHA1-Public-Domain"
+    }
+  ],
+  "comment": "Conservative attribution inventory for the QtBase modules and the Qt-distributed Windows software OpenGL fallback shipped by MoonShell. Optional/platform-specific QtBase entries may not be present in every PySide6 binary build."
+}

@@ -13,3 +13,4 @@
 
 # Binary assets.
 *.png binary
+*.ico binary

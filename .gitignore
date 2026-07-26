@@ -5,8 +5,18 @@ __pycache__/
 
 # Virtual environment / launcher state
 .venv/
+.build-venv/
+.python-build/
 .deps-installed
 last-run.log
+
+# Release outputs
+build/
+dist/
+
+# Signing credentials (never commit private keys)
+*.pfx
+*.p12
 
 # OS
 Thumbs.db

@@ -1,3 +1,5 @@
-PySide6>=6.7,<7
+# Core/Gui/Network/Widgets live in Essentials; the much larger Addons wheel is
+# not used by the desktop pet.
+PySide6-Essentials>=6.7,<7
 psutil>=5.9,<8
-Pillow>=10.0,<13
+Pillow>=12.3,<13

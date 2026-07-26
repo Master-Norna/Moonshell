@@ -4,19 +4,48 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: "23 3 * * 1"
+
+permissions:
+  contents: read
 
 jobs:
-  test:
-    runs-on: windows-latest
+  dependency-audit:
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Audit the hashed Windows release lock
+        uses: pypa/gh-action-pip-audit@1220774d901786e6f652ae159f7b6bc8fea6d266 # v1.1.0
         with:
-          python-version: "3.11"
+          inputs: requirements-build.txt
+          require-hashes: true
+          no-deps: true
+          internal-be-careful-extra-flags: --disable-pip
+
+  test:
+    name: test-python-${{ matrix.python }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: ${{ matrix.python }}
           cache: pip
+          cache-dependency-path: requirements.txt
       - name: Install dependencies
         run: pip install -r requirements.txt
       - name: Run tests
         run: python -m unittest discover -s tests -v
         env:
           QT_QPA_PLATFORM: offscreen
+      - name: Validate sprite assets and layout
+        run: |
+          python tools/build_icon.py
+          python tools/check_sprites.py
+          python tools/check_layout.py
+          python tools/check_release.py

@@ -1,0 +1,14 @@
+QtBase source release: 6.11.1
+URL: https://download.qt.io/official_releases/qt/6.11/6.11.1/submodules/qtbase-everywhere-src-6.11.1.tar.xz
+SHA-256: d9594a31228aa23ad6b531719a29b45f0f3989fe6c136d45767ea179f233c1ac
+Qt Translations source URL: https://download.qt.io/official_releases/qt/6.11/6.11.1/submodules/qttranslations-everywhere-src-6.11.1.tar.xz
+Qt Translations SHA-256: 37c02c81206594c7bb4edca85ac93e8e55a9836b70c960fde6cb0f8623ec5677
+Qt for Python / Shiboken source URL: https://download.qt.io/official_releases/QtForPython/pyside6/PySide6-6.11.1-src/pyside-setup-everywhere-src-6.11.1.tar.xz
+Qt for Python / Shiboken SHA-256: 6ffd9835bb0dd2c56f061d62f1616bb1707cfc0202b80e3165d6be087f3965e2
+Selected QDoc modules: qtcore, qtgui, qtnetwork
+QtBase metadata entries: 52
+Packaged binary extras: 1 (Mesa llvmpipe / opengl32sw.dll)
+LLVMPipe attribution: https://doc.qt.io/qtcreator/qtcreator-binary-attribution-llvmpipe.html
+LLVMPipe binary SHA-256: 4a7d90f91fdecb5df7b426bc2d05974b8d7ffa450af2d1f93f3eca05800718da
+Generated component entries: 53
+NOTICE SHA-256: ac8b222b346e781be587e09fbb37c1fe0477724decc68ec2952325eb2e50f59f

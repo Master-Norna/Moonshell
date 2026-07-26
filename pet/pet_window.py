@@ -1,39 +1,71 @@
 from __future__ import annotations
 
 import ctypes
+import html
 import logging
 import math
+import os
 import random
 import sys
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import Qt, QTimer, QPoint, QPointF, QRect, QSize
+from PySide6.QtCore import (
+    QEvent,
+    QUrl,
+    Qt,
+    QTimer,
+    QPoint,
+    QPointF,
+    QRect,
+    QSize,
+    QStandardPaths,
+)
 from PySide6.QtGui import (
     QAction,
+    QActionGroup,
+    QBrush,
     QColor,
     QCursor,
+    QDesktopServices,
     QFont,
+    QFontDatabase,
     QIcon,
     QImage,
+    QLinearGradient,
     QMouseEvent,
     QPainter,
+    QPainterPath,
     QPen,
     QPixmap,
     QPolygon,
+    QRegion,
 )
 from PySide6.QtWidgets import (
+    QDialog,
+    QFileDialog,
+    QGridLayout,
+    QLabel,
     QMenu,
+    QMessageBox,
+    QPushButton,
     QSystemTrayIcon,
+    QTextBrowser,
+    QVBoxLayout,
     QWidget,
     QApplication,
 )
 
+from .logging_setup import close_logging
+from .moon_phase import MoonPhase, calculate_moon_phase
+from .paths import DATA_DIR, clear_known_local_data
 from .monitor import SystemMonitor, Telemetry, machine_load
 from .settings import Settings
 from .state import PetState
+from .version import APP_NAME, APP_VERSION, PROJECT_URL
 from .sprite_config import (
     MAX_DOWN_OFFSET,
     MAX_UP_OFFSET,
@@ -104,9 +136,9 @@ class StageProfile:
 class SpritePetWindow(QWidget):
     """Moon-shell spirit desktop pet.
 
-    v14 changes the rendering model from "a scaled 48x48 sprite in a tight
-    window" to "a 48x48 sprite inside a padded 72x72 action stage."  This is the
-    structural fix for head clipping.  A jump/hover may move inside the padded
+    The rendering model keeps a 96x96 sprite inside a padded 144x144 action
+    stage instead of sizing the window around each pose. This is the structural
+    fix for head clipping. A jump/hover may move inside the padded
     action stage, but the stage itself stays inside a larger transparent window.
     """
 
@@ -133,6 +165,8 @@ class SpritePetWindow(QWidget):
     EDGE_GAP = 2             # how close the *visible* sprite may get to a screen edge
     PARK_ZONE = 40           # within this of a screen edge, the pet "parks" and rests
     EDGE_PEEK_ZONE = 12      # hard against an edge -> it peeks over the side
+    STAGE_CACHE_LIMIT = 96   # cap standard-size pixmaps at roughly 32 MiB
+    MAX_FOCUS_SECONDS = 90 * 60
 
     # ----- procedural "aliveness" motion (source-space px / frames) -----
     # Walk legs + body bob are driven by distance travelled, not a timer, so the
@@ -203,14 +237,29 @@ class SpritePetWindow(QWidget):
         "walk_left_2": "walk_left_2",
     }
 
-    def __init__(self, settings: Settings, root: Path) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        root: Path,
+        *,
+        state_path: Optional[Path] = None,
+    ) -> None:
         super().__init__()
         self.settings = settings
+        self._settings_dirty = False
+        self._settings_save_failed = False
+        self._state_save_failed = False
         self.root = root
+        self._state_path = state_path
+        self._shutdown_done = False
+        self._discard_data_on_shutdown = False
+        self._runtime_active = settings.enabled
         self.assets_dir = root / "assets" / "moonshell"
 
         self.sprite_images: dict[str, QImage] = {}
-        self._stage_cache: dict[tuple[str, int, int, int], QPixmap] = {}
+        self._stage_cache: OrderedDict[
+            tuple[str, int, int, int], QPixmap
+        ] = OrderedDict()
         self._load_sprites()
 
         # Where the actual drawn character sits inside each 96px sprite, so the
@@ -228,7 +277,7 @@ class SpritePetWindow(QWidget):
         self.action = Action("idle", 0, False)
         self.message = ""
         self.message_until = 0.0
-        self.last_idle_action = time.time()
+        self.last_idle_action = time.monotonic()
         self._next_idle_gap = random.uniform(4.0, 9.0)
         self.last_hover = 0.0
         self.collapsed = False
@@ -239,7 +288,7 @@ class SpritePetWindow(QWidget):
         self._last_bubble_rect: Optional[QRect] = None
         self._last_render_sig: Optional[tuple] = None
         self._extents_cache: dict[str, Optional[tuple[int, int, int, int]]] = {}
-        self._click_through: Optional[bool] = None
+        self._input_mask_signature: Optional[tuple] = None
 
         # autonomous strolling along the taskbar
         self.walking = False
@@ -266,7 +315,7 @@ class SpritePetWindow(QWidget):
         self._throw_vx = 0.0
         self._throw_vy = 0.0
         self._drag_history: list[tuple[float, int, int]] = []
-        self._last_phys_t = time.perf_counter()
+        self._last_phys_t = time.monotonic()
 
         # cursor attentiveness + petting
         self._cursor_was_near = False
@@ -291,14 +340,66 @@ class SpritePetWindow(QWidget):
         self._prev_idle_sec = 0.0
         self._cursor_pos = QCursor.pos()
         self._active_streak = 0.0     # seconds you've been continuously present
-        self._last_brain_t = time.time()
+        self._last_brain_t = time.monotonic()
         self._react_last: dict[str, float] = {}
         self._slept_tonight = False
         self._greeted_morning_day = -1
         self._dusk_day = -1
+        self._next_moon_phase_check = 0.0
 
         # ----- cross-session continuity: carry mood forward, remember you -----
-        self._state = PetState.load()
+        self._state = (
+            PetState.load(self._state_path)
+            if self._state_path is not None
+            else PetState.load()
+        )
+        self._state_needs_initial_save = False
+        self._gift_clock_guarded_day = ""
+        self._gift_clock_notice_shown = False
+        self._gift_save_failed = False
+        today_key = time.strftime("%Y-%m-%d")
+        if not self._state.first_seen_date:
+            self._state.first_seen_date = today_key
+            self._state_needs_initial_save = True
+        elif self._state.first_seen_date > today_key:
+            # A temporary future system clock must not leave companionship
+            # metadata permanently ahead of the user's real calendar.
+            self._state.first_seen_date = today_key
+            self._state_needs_initial_save = True
+        if self._state.last_gift_date > today_key:
+            # Guard today against a duplicate, but repair the poisoned future
+            # marker so tomorrow's legitimate gift becomes claimable again.
+            self._state.last_gift_date = today_key
+            self._gift_clock_guarded_day = today_key
+            self._state_needs_initial_save = True
+        if self._state.normalize_focus_today():
+            self._state_needs_initial_save = True
+
+        focus_remaining = self._state.focus_until - time.time()
+        if 0.0 < focus_remaining <= self.MAX_FOCUS_SECONDS:
+            self._focus_deadline = time.monotonic() + focus_remaining
+            if self._state.focus_planned_minutes <= 0:
+                # Old state files only stored the deadline. Preserve a sensible
+                # completion duration when migrating an in-progress session.
+                self._state.focus_planned_minutes = max(
+                    1,
+                    min(
+                        90,
+                        int(math.ceil(focus_remaining / 60.0)),
+                    ),
+                )
+                self._state_needs_initial_save = True
+        else:
+            self._focus_deadline = 0.0
+            if (
+                self._state.focus_until
+                or self._state.focus_planned_minutes
+            ):
+                self._state.focus_until = 0.0
+                self._state.focus_planned_minutes = 0
+                self._state_needs_initial_save = True
+        self._focus_completed_pending = False
+
         self._startup_absence = self._state.absence_seconds()
         if self._startup_absence < 0 or self._startup_absence > 6 * 3600:
             # first launch ever, or away a long time -> wake near baseline, but
@@ -311,6 +412,8 @@ class SpritePetWindow(QWidget):
             # a short gap relaxes drowsiness a touch; a longer one more so
             self.mood.sleepiness = max(0.0, self._state.sleepiness - self._startup_absence / 36000.0)
         self.mood.clamp()
+        if self._state.last_gift_date == today_key:
+            self._gift_day = time.localtime().tm_yday
         self._busy_samples = 0
         self._memory_samples = 0
         self._vram_samples = 0
@@ -331,11 +434,22 @@ class SpritePetWindow(QWidget):
         self._configure_window()
         self._apply_size(persist=False)
         self._build_tray()
+        self._exit_for_missing_tray = (
+            not self._tray_available and not self._runtime_active
+        )
+        if self._exit_for_missing_tray:
+            # "Disabled" is an explicit durable choice. If Explorer offers no
+            # tray entry, preserve that choice and leave cleanly instead of
+            # silently turning the companion back on or becoming unreachable.
+            logger.warning(
+                "System tray unavailable while companion is disabled; exiting"
+            )
 
         self.anim_timer = QTimer(self)
         self.anim_timer.setInterval(140)
         self.anim_timer.timeout.connect(self._on_anim)
-        self.anim_timer.start()
+        if self._runtime_active:
+            self.anim_timer.start()
 
         # Smooth 60fps loop, only running while the pet is airborne.
         self.phys_timer = QTimer(self)
@@ -347,15 +461,53 @@ class SpritePetWindow(QWidget):
         self.hover_timer.setInterval(900)
         self.hover_timer.timeout.connect(self._hover_ready)
 
+        self._teleport_timer = QTimer(self)
+        self._teleport_timer.setSingleShot(True)
+        self._teleport_timer.setInterval(520)
+        self._teleport_timer.timeout.connect(self._finish_teleport)
+
+        self._mask_timer = QTimer(self)
+        self._mask_timer.setSingleShot(True)
+        self._mask_timer.setInterval(0)
+        self._mask_timer.timeout.connect(self._update_input_mask)
+
+        self._focus_timer = QTimer(self)
+        self._focus_timer.setSingleShot(True)
+        self._focus_timer.timeout.connect(self._complete_focus)
+
+        self._focus_status_timer = QTimer(self)
+        self._focus_status_timer.setInterval(30000)
+        self._focus_status_timer.timeout.connect(self._refresh_tray_status)
+
+        # Hidden windows keep one very low-frequency safety check alive. If
+        # Explorer's tray disappears after the pet was hidden, recall it before
+        # it can become an unreachable background process.
+        self._tray_watchdog = QTimer(self)
+        self._tray_watchdog.setInterval(5000)
+        self._tray_watchdog.timeout.connect(self._check_hidden_tray)
+        self._tray_missing_checks = 0
+        if not self._runtime_active:
+            self._tray_watchdog.start()
+
         # Persist mood + "last seen" so it survives restarts (crash-safe autosave).
         self.state_timer = QTimer(self)
         self.state_timer.setInterval(60000)
         self.state_timer.timeout.connect(self._save_state)
-        self.state_timer.start()
+        if self._runtime_active:
+            self.state_timer.start()
 
-        self.monitor = SystemMonitor(self)
+        # Resolution/DPI changes arrive as a burst of signals. A restartable
+        # single-shot timer performs one final revalidation after the burst.
+        self._display_timer = QTimer(self)
+        self._display_timer.setSingleShot(True)
+        self._display_timer.setInterval(200)
+        self._display_timer.timeout.connect(self._revalidate_position)
+
+        self.monitor = SystemMonitor(
+            self,
+            active=self._runtime_active and self.settings.system_awareness,
+        )
         self.monitor.telemetry.connect(self._on_telemetry)
-        self.monitor.set_active(self.settings.enabled)
 
         clip = QApplication.clipboard()
         if clip is not None:
@@ -364,19 +516,34 @@ class SpritePetWindow(QWidget):
 
         app = QApplication.instance()
         if app is not None:
-            app.aboutToQuit.connect(self._save_state)  # persist mood on any exit
+            app.aboutToQuit.connect(self._shutdown)
 
         self._connect_screen_signals()
+        self._arm_focus_timers()
 
         self._snap_to_taskbar(initial=True)
-        if self.settings.enabled:
+        if self._runtime_active:
             self.show()
         else:
             self.hide()
 
         pose, line = self._startup_greeting()
-        self._set_action(pose, 1.8, line)
+        greeting_seconds = 3.6 if self._startup_absence < 0 else 1.8
+        restoring_focus = self._focus_active
+        self._set_action(pose, greeting_seconds, force=restoring_focus)
+        self.say(
+            line,
+            duration=max(2.0, min(3.8, greeting_seconds + 0.4)),
+            force=restoring_focus,
+        )
         self._was_parked = self._is_parked()
+        self._refresh_tray_status()
+        if self._state_needs_initial_save:
+            self._save_state()
+        if self._exit_for_missing_tray:
+            QTimer.singleShot(0, self._resolve_disabled_startup_without_tray)
+        elif not self._runtime_active:
+            QTimer.singleShot(0, self._notify_disabled_startup)
 
     # ---------- setup ----------
     # Core poses must exist (the pet can't run without them).
@@ -475,9 +642,13 @@ class SpritePetWindow(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.setMouseTracking(True)
-        # setWindowFlags recreates the native window, dropping any extended
-        # style we applied -- forget the cached state so it gets re-applied.
-        self._click_through = None
+        self.setWindowTitle(APP_NAME)
+        self.setAccessibleName("月壳游灵桌面陪伴")
+        self.setAccessibleDescription(
+            "可点击摸头、拖动位置，并通过右键或通知区域菜单操作的桌面月灵"
+        )
+        # setWindowFlags recreates the native window and drops its mask.
+        self._input_mask_signature = None
         self._disable_dwm_frame()
 
     def _disable_dwm_frame(self) -> None:
@@ -536,16 +707,19 @@ class SpritePetWindow(QWidget):
         self.profile = self._profile_for_mode(self.settings.size_mode)
         self.setFixedSize(self.profile.window_w, self.profile.window_h)
         self._stage_cache.clear()
+        self._input_mask_signature = None
         if persist:
-            self.settings.save()
             self._snap_to_taskbar(initial=False)
         self.update()
 
     def _current_dpr(self) -> float:
-        handle = self.windowHandle()
-        screen = handle.screen() if handle is not None else None
+        screen = self._window_screen()
         if screen is None:
             screen = QApplication.screenAt(QCursor.pos()) or QApplication.primaryScreen()
+        return self._screen_dpr(screen)
+
+    @staticmethod
+    def _screen_dpr(screen) -> float:
         try:
             return max(1.0, float(screen.devicePixelRatio())) if screen else 1.0
         except Exception:
@@ -562,13 +736,14 @@ class SpritePetWindow(QWidget):
     def _build_stage_pixmap(self, name: str, dpr: float, src_x_offset: int, src_y_offset: int) -> QPixmap:
         if name not in self.sprite_images:  # optional pose missing -> safe fallback
             name = "idle"
+        src_y_offset = max(self.MAX_UP_OFFSET, min(self.MAX_DOWN_OFFSET, src_y_offset))
         dpr_key = int(round(dpr * 1000))
         key = (name, dpr_key, src_x_offset, src_y_offset)
         cached = self._stage_cache.get(key)
         if cached is not None:
+            self._stage_cache.move_to_end(key)
             return cached
 
-        src_y_offset = max(self.MAX_UP_OFFSET, min(self.MAX_DOWN_OFFSET, src_y_offset))
         stage = QImage(self.STAGE_SIZE, self.STAGE_SIZE, QImage.Format.Format_ARGB32)
         stage.fill(Qt.GlobalColor.transparent)
 
@@ -590,18 +765,53 @@ class SpritePetWindow(QWidget):
         pix = QPixmap.fromImage(scaled)
         pix.setDevicePixelRatio(dpr)
         self._stage_cache[key] = pix
+        if len(self._stage_cache) > self.STAGE_CACHE_LIMIT:
+            self._stage_cache.popitem(last=False)
         return pix
 
     def _build_tray(self) -> None:
         self.tray = QSystemTrayIcon(self)
-        self.tray.setIcon(self._make_tray_icon())
-        self.tray.setToolTip("像素桌宠 · 月壳游灵 v14 stage")
+        self._tray_available = bool(QSystemTrayIcon.isSystemTrayAvailable())
+        icon_path = self.root / "assets" / "branding" / "moonshell.ico"
+        self._app_icon = QIcon(str(icon_path)) if icon_path.exists() else QIcon()
+        if self._app_icon.isNull():
+            self._app_icon = self._make_app_icon()
+        self.tray.setIcon(self._app_icon)
+        self.setWindowIcon(self._app_icon)
+        app = QApplication.instance()
+        if app is not None:
+            app.setWindowIcon(self._app_icon)
+        self.tray.setToolTip("月壳游灵")
 
-        menu = QMenu()
-        self.act_enabled = QAction("启用桌宠", self, checkable=True)
+        # QSystemTrayIcon does not own its context menu. Parent it explicitly so
+        # repeated window creation (tests/restarts) cannot leave native menus alive.
+        menu = QMenu(self)
+        self.tray_menu = menu
+
+        self.status_action = QAction("", self)
+        self.status_action.setEnabled(False)
+        menu.addAction(self.status_action)
+        self.memory_action = QAction("", self)
+        self.memory_action.setEnabled(False)
+        menu.addAction(self.memory_action)
+        self.act_companion_journal = QAction("陪伴手账", self)
+        self.act_companion_journal.triggered.connect(
+            self._show_companion_journal
+        )
+        menu.addAction(self.act_companion_journal)
+        self.act_today_gift = QAction("查看今天的月光", self)
+        self.act_today_gift.triggered.connect(self._show_today_gift)
+        menu.addAction(self.act_today_gift)
+        menu.addSeparator()
+
+        self.act_enabled = QAction("显示桌面月灵（重启后保持）", self, checkable=True)
         self.act_enabled.setChecked(self.settings.enabled)
         self.act_enabled.triggered.connect(self._toggle_enabled)
         menu.addAction(self.act_enabled)
+
+        self.act_visibility = QAction("", self)
+        self.act_visibility.triggered.connect(self._toggle_visibility)
+        menu.addAction(self.act_visibility)
 
         self.act_top = QAction("始终置顶", self, checkable=True)
         self.act_top.setChecked(self.settings.always_on_top)
@@ -612,34 +822,94 @@ class SpritePetWindow(QWidget):
         # high/low intensity.  high = strolls + talks + livelier; low = stays put,
         # quiet, calmer.
         act_menu = menu.addMenu("活动强度")
-        self.act_lively = QAction("高 · 活泼", self, checkable=True)
-        self.act_calm = QAction("低 · 沉静", self, checkable=True)
+        self.activity_menu = act_menu
+        self.act_lively = QAction("活泼 · 会散步和说话", self, checkable=True)
+        self.act_calm = QAction("沉静 · 原地少打扰", self, checkable=True)
+        self.activity_group = QActionGroup(self)
+        self.activity_group.setExclusive(True)
+        self.activity_group.addAction(self.act_lively)
+        self.activity_group.addAction(self.act_calm)
         self.act_lively.setChecked(self.settings.activity == "high")
         self.act_calm.setChecked(self.settings.activity == "low")
-        self.act_lively.triggered.connect(lambda: self._set_activity("high"))
-        self.act_calm.triggered.connect(lambda: self._set_activity("low"))
+        self.act_lively.triggered.connect(
+            lambda checked: checked and self._set_activity("high")
+        )
+        self.act_calm.triggered.connect(
+            lambda checked: checked and self._set_activity("low")
+        )
         act_menu.addAction(self.act_lively)
         act_menu.addAction(self.act_calm)
 
+        focus_menu = menu.addMenu("专注陪伴")
+        self.focus_menu = focus_menu
+        self.act_focus_25 = QAction("专注 25 分钟", self)
+        self.act_focus_50 = QAction("专注 50 分钟", self)
+        self.act_focus_90 = QAction("专注 90 分钟", self)
+        self.act_focus_end = QAction("结束专注", self)
+        self.act_focus_25.triggered.connect(lambda: self._start_focus(25))
+        self.act_focus_50.triggered.connect(lambda: self._start_focus(50))
+        self.act_focus_90.triggered.connect(lambda: self._start_focus(90))
+        self.act_focus_end.triggered.connect(self._cancel_focus)
+        focus_menu.addAction(self.act_focus_25)
+        focus_menu.addAction(self.act_focus_50)
+        focus_menu.addAction(self.act_focus_90)
+        focus_menu.addSeparator()
+        focus_menu.addAction(self.act_focus_end)
+
         size_menu = menu.addMenu("尺寸")
+        self.size_menu = size_menu
         self.act_small = QAction("紧凑尺寸", self, checkable=True)
         self.act_standard = QAction("标准尺寸", self, checkable=True)
+        self.size_group = QActionGroup(self)
+        self.size_group.setExclusive(True)
+        self.size_group.addAction(self.act_small)
+        self.size_group.addAction(self.act_standard)
         self.act_small.setChecked(self.settings.size_mode != "standard")
         self.act_standard.setChecked(self.settings.size_mode == "standard")
-        self.act_small.triggered.connect(lambda: self._set_size_mode("small"))
-        self.act_standard.triggered.connect(lambda: self._set_size_mode("standard"))
+        self.act_small.triggered.connect(
+            lambda checked: checked and self._set_size_mode("small")
+        )
+        self.act_standard.triggered.connect(
+            lambda checked: checked and self._set_size_mode("standard")
+        )
         size_menu.addAction(self.act_small)
         size_menu.addAction(self.act_standard)
 
-        menu.addSeparator()
-        debug = QAction("显示调试边界", self, checkable=True)
-        debug.setChecked(self.debug_bounds)
-        debug.triggered.connect(self._toggle_debug_bounds)
-        menu.addAction(debug)
+        awareness_menu = menu.addMenu("感知与隐私")
+        self.awareness_menu = awareness_menu
+        self.act_system_awareness = QAction("感知设备忙闲", self, checkable=True)
+        self.act_system_awareness.setChecked(self.settings.system_awareness)
+        self.act_system_awareness.triggered.connect(self._toggle_system_awareness)
+        awareness_menu.addAction(self.act_system_awareness)
 
-        reset = QAction("重置位置", self)
-        reset.triggered.connect(lambda: self._snap_to_taskbar(initial=True, reset_x=True))
-        menu.addAction(reset)
+        self.act_clipboard = QAction("回应复制动作", self, checkable=True)
+        self.act_clipboard.setChecked(self.settings.clipboard_reactions)
+        self.act_clipboard.triggered.connect(self._toggle_clipboard_reactions)
+        awareness_menu.addAction(self.act_clipboard)
+        awareness_menu.addSeparator()
+        self.act_privacy_details = QAction("查看完整隐私说明…", self)
+        self.act_privacy_details.triggered.connect(self._show_about)
+        awareness_menu.addAction(self.act_privacy_details)
+
+        menu.addSeparator()
+        self.act_help = QAction("快速使用提示", self)
+        self.act_help.triggered.connect(self._show_usage_tip)
+        menu.addAction(self.act_help)
+
+        self.act_about = QAction("使用与隐私 · 关于", self)
+        self.act_about.triggered.connect(self._show_about)
+        menu.addAction(self.act_about)
+
+        self.act_recall = QAction("唤回到主屏幕", self)
+        self.act_recall.triggered.connect(self._recall_pet)
+        menu.addAction(self.act_recall)
+
+        if os.environ.get("MOONSHELL_DEBUG") == "1":
+            advanced_menu = menu.addMenu("开发者选项")
+            debug = QAction("显示调试边界", self, checkable=True)
+            debug.setChecked(self.debug_bounds)
+            debug.triggered.connect(self._toggle_debug_bounds)
+            advanced_menu.addAction(debug)
 
         menu.addSeparator()
         quit_action = QAction("退出", self)
@@ -647,22 +917,47 @@ class SpritePetWindow(QWidget):
         menu.addAction(quit_action)
 
         self.tray.setContextMenu(menu)
+        menu.aboutToShow.connect(self._refresh_tray_status)
         self.tray.activated.connect(self._tray_activated)
+        self.tray.messageClicked.connect(self._on_tray_message_clicked)
+        # Qt will automatically add a visible icon if Explorer's tray appears
+        # later, so show it even when the initial availability probe is false.
         self.tray.show()
+        if not self._tray_available:
+            logger.warning("System tray is not currently available")
 
-    def _make_tray_icon(self) -> QIcon:
-        pix = QPixmap(64, 64)
-        pix.fill(Qt.GlobalColor.transparent)
-        p = QPainter(pix)
-        p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
-        icon_img = self.sprite_images["idle"].scaled(
-            QSize(56, 56),
-            Qt.AspectRatioMode.IgnoreAspectRatio,
-            Qt.TransformationMode.FastTransformation,
-        )
-        p.drawPixmap(QPoint(4, 4), QPixmap.fromImage(icon_img))
-        p.end()
-        return QIcon(pix)
+    def _make_app_icon(self) -> QIcon:
+        """Build a crisp multi-size icon from the visible idle character.
+
+        Cropping the transparent 96px canvas first makes the pet legible in the
+        16px Windows tray instead of shrinking it into a tiny gold dot.
+        """
+        image = self.sprite_images["idle"]
+        extents = self._alpha_extents(image)
+        if extents is None:
+            return QIcon(QPixmap.fromImage(image))
+        left, top, right, bottom = extents
+        crop = image.copy(left, top, right - left + 1, bottom - top + 1)
+
+        icon = QIcon()
+        for size in (16, 20, 24, 32, 48, 64):
+            pixmap = QPixmap(size, size)
+            pixmap.fill(Qt.GlobalColor.transparent)
+            target = max(1, size - 2)
+            scaled = crop.scaled(
+                QSize(target, target),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.FastTransformation,
+            )
+            painter = QPainter(pixmap)
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
+            painter.drawImage(
+                QPoint((size - scaled.width()) // 2, (size - scaled.height()) // 2),
+                scaled,
+            )
+            painter.end()
+            icon.addPixmap(pixmap)
+        return icon
 
     # ---------- positioning ----------
     def _screen_by_name(self, name: Optional[str]):
@@ -674,10 +969,16 @@ class SpritePetWindow(QWidget):
         return None
 
     def _window_screen(self):
+        # Geometry is authoritative while crossing between monitors. The native
+        # windowHandle().screen() signal can lag one mouse-move behind, which used
+        # to clamp a drag to the monitor it started on.
+        screen = QApplication.screenAt(self.geometry().center())
+        if screen is not None:
+            return screen
         handle = self.windowHandle()
         screen = handle.screen() if handle is not None else None
         if screen is None:
-            screen = QApplication.screenAt(self.geometry().center()) or QApplication.primaryScreen()
+            screen = QApplication.primaryScreen()
         return screen
 
     def _window_screen_available(self) -> QRect:
@@ -690,9 +991,9 @@ class SpritePetWindow(QWidget):
         y = (ag.bottom() + 1) - self.profile.ground_y
         return max(ag.top() + 8, min(y, ag.bottom() - self.height() + self.profile.bottom_margin))
 
-    def _sprite_insets(self) -> tuple[float, float]:
+    def _sprite_insets(self, dpr: Optional[float] = None) -> tuple[float, float]:
         """Logical px from each window edge to the visible character's edges."""
-        dpr = self._current_dpr()
+        dpr = self._current_dpr() if dpr is None else max(1.0, dpr)
         stage_size = self._stage_logical_size(dpr)
         stage_x = (self.width() - stage_size) / 2.0
         scale = stage_size / self.STAGE_SIZE
@@ -701,12 +1002,16 @@ class SpritePetWindow(QWidget):
         right_inset = self.width() - (stage_x + right_edge * scale)
         return left_inset, right_inset
 
-    def _x_bounds(self, ag: Optional[QRect] = None) -> tuple[int, int]:
+    def _x_bounds(
+        self,
+        ag: Optional[QRect] = None,
+        dpr: Optional[float] = None,
+    ) -> tuple[int, int]:
         # Clamp the *visible* character to the screen edge, letting the window's
         # transparent padding hang off-screen.  Otherwise that padding acts as an
         # invisible wall that stops the pet well short of the left/right edges.
         ag = ag or self._window_screen_available()
-        left_inset, right_inset = self._sprite_insets()
+        left_inset, right_inset = self._sprite_insets(dpr)
         min_x = int(round(ag.left() + self.EDGE_GAP - left_inset))
         max_x = int(round(ag.right() - self.EDGE_GAP - self.width() + right_inset))
         if max_x < min_x:
@@ -744,8 +1049,10 @@ class SpritePetWindow(QWidget):
 
     def _snap_to_taskbar(self, initial: bool = False, reset_x: bool = False) -> None:
         screen = self._screen_by_name(self.settings.screen_name) if initial else None
+        if screen is None:
+            screen = self._window_screen()
         ag = screen.availableGeometry() if screen is not None else self._window_screen_available()
-        min_x, max_x = self._x_bounds(ag)
+        min_x, max_x = self._x_bounds(ag, self._screen_dpr(screen))
         if reset_x:
             x = max_x - 50
         elif initial and self.settings.x_ratio is not None:
@@ -760,15 +1067,64 @@ class SpritePetWindow(QWidget):
         if not initial:
             self._save_position()
 
-    def _save_position(self) -> None:
+    def _save_position(self, *, persist: bool = True) -> None:
         min_x, max_x = self._x_bounds()
-        self.settings.x = self.x()
-        self.settings.x_ratio = (
+        new_x = self.x()
+        new_ratio = (
             (self.x() - min_x) / (max_x - min_x) if max_x > min_x else 0.5
         )
         screen = self._window_screen()
-        self.settings.screen_name = screen.name() if screen is not None else None
-        self.settings.save()
+        new_screen_name = screen.name() if screen is not None else None
+        changed = (
+            self.settings.x != new_x
+            or self.settings.x_ratio != new_ratio
+            or self.settings.screen_name != new_screen_name
+        )
+        self.settings.x = new_x
+        self.settings.x_ratio = new_ratio
+        self.settings.screen_name = new_screen_name
+        if changed:
+            self._settings_dirty = True
+        if persist and self._settings_dirty:
+            self._persist_settings()
+
+    def _notify_persistence_failure(self, message: str) -> None:
+        if self._shutdown_done:
+            return
+        if self._runtime_active and self.isVisible():
+            self._set_action("curious", 3.4, force=True)
+            self.say(message, 4.6, force=True)
+        elif hasattr(self, "tray") and self._probe_tray_available():
+            try:
+                self.tray.showMessage(
+                    "MoonShell 数据未保存",
+                    message,
+                    QSystemTrayIcon.MessageIcon.Warning,
+                    7000,
+                )
+            except Exception:
+                pass
+        self._refresh_tray_status()
+
+    def _persist_settings(self, *, notify_failure: bool = True) -> bool:
+        """Keep a transient profile error from breaking a UI event or shutdown."""
+        was_failed = self._settings_save_failed
+        try:
+            self.settings.save()
+            self._settings_dirty = False
+            self._settings_save_failed = False
+            if was_failed:
+                self._refresh_tray_status()
+            return True
+        except Exception as exc:
+            self._settings_dirty = True
+            self._settings_save_failed = True
+            logger.warning("Could not save settings: %s", exc)
+            if notify_failure and not was_failed:
+                self._notify_persistence_failure(
+                    "设置仅在本次运行中生效，未能保存到本地。"
+                )
+            return False
 
     # ---------- display / multi-monitor compatibility ----------
     def _connect_screen_signals(self) -> None:
@@ -803,7 +1159,7 @@ class SpritePetWindow(QWidget):
 
     def _on_display_changed(self, *args) -> None:
         # Coalesce the burst of signals a resolution / monitor switch emits.
-        QTimer.singleShot(200, self._revalidate_position)
+        self._display_timer.start()
 
     def _revalidate_position(self) -> None:
         """Keep the pet on a real screen after a resolution / monitor / DPI change."""
@@ -848,11 +1204,16 @@ class SpritePetWindow(QWidget):
             self._paint_debug_bounds(painter, stage_x, stage_y, stage_size, bubble_rect)
 
         painter.end()
+        self._update_input_mask()
 
     def _render_signature(self) -> tuple:
         """Everything the next paint depends on. If this hasn't changed since the
         last animation tick, repainting would redraw identical pixels."""
-        bubble = self.message if (self.message and time.time() <= self.message_until) else ""
+        bubble = (
+            self.message
+            if (self.message and time.monotonic() <= self.message_until)
+            else ""
+        )
         return (*self._current_render_spec(), bubble, self.debug_bounds)
 
     def _update_if_dirty(self) -> None:
@@ -908,7 +1269,7 @@ class SpritePetWindow(QWidget):
 
     def _current_render_spec(self) -> tuple[str, int, int]:
         name = self._current_sprite_name()
-        now = time.time()
+        now = time.monotonic()
         src_x_offset = 0
         src_y_offset = 0
 
@@ -945,10 +1306,15 @@ class SpritePetWindow(QWidget):
             if 0.0 <= age < self.SETTLE_T:
                 src_y_offset += -round(self.SETTLE_AMP * math.sin(math.pi * age / self.SETTLE_T))
 
+        # The curious artwork has three extra transparent-stage pixels below its
+        # feet compared with the grounded idle pose; compensate at render time.
+        if name == "curious":
+            src_y_offset -= 3
+
         return name, src_x_offset, src_y_offset
 
     def _current_sprite_name(self) -> str:
-        now = time.time()
+        now = time.monotonic()
         if self.held or self.falling:
             return "hover"
         if self._resource_alert_until > now:
@@ -960,7 +1326,7 @@ class SpritePetWindow(QWidget):
         phase = self.frame % 140
         if self.collapsed:
             return "peek"
-        if 76 <= phase <= 81:
+        if 76 <= phase <= 77:
             return "blink"
         # When it's genuinely drowsy, its very resting face goes heavy-lidded --
         # the baseline look itself shifts with mood, not just the occasional beat.
@@ -978,7 +1344,7 @@ class SpritePetWindow(QWidget):
         stage_size: float,
         src_y_offset: int = 0,
     ) -> Optional[QRect]:
-        if not self.message or time.time() > self.message_until:
+        if not self.message or time.monotonic() > self.message_until:
             return None
 
         lines = self._wrap_cn(self.message, max_chars=12)
@@ -992,6 +1358,11 @@ class SpritePetWindow(QWidget):
         bw = min(max(text_w + 28, self.profile.bubble_min_w), self.profile.bubble_max_w)
         bh = len(lines) * line_h + 16
         bx = int(round((self.width() - bw) / 2))
+        ag = self._window_screen_available()
+        min_bx = ag.left() - self.x() + 2
+        max_bx = ag.right() + 1 - self.x() - bw - 2
+        if min_bx <= max_bx:
+            bx = max(min_bx, min(bx, max_bx))
 
         # Anchor to the visible top of the head (inside the padded stage), not the
         # stage's transparent ceiling -- otherwise the bubble floats off in space.
@@ -1005,7 +1376,7 @@ class SpritePetWindow(QWidget):
 
         rect = QRect(bx, by, bw, bh)
         painter.setPen(QPen(QColor("#7890ff"), 1))
-        painter.setBrush(QColor(79, 104, 190, 235))
+        painter.setBrush(QColor(79, 104, 190, 255))
         painter.drawRoundedRect(rect, 12, 12)
 
         # Little tail so the bubble visibly belongs to the pet's head.
@@ -1018,7 +1389,7 @@ class SpritePetWindow(QWidget):
             QPoint(tail_cx, tail_top + 8),
         ])
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(79, 104, 190, 235))
+        painter.setBrush(QColor(79, 104, 190, 255))
         painter.drawPolygon(tail)
         painter.setPen(QPen(QColor("#7890ff"), 1))
         painter.drawLine(tail.at(0), tail.at(2))
@@ -1067,76 +1438,103 @@ class SpritePetWindow(QWidget):
             )
         return self._extents_cache[name]
 
-    def _is_interactive_point(self, point: QPoint) -> bool:
-        """Only the visible pet and speech bubble should consume desktop input."""
-        now = time.time()
-        if (
-            self._last_bubble_rect is not None
-            and self.message
-            and now <= self.message_until
-        ):
-            bubble_hit = self._last_bubble_rect.adjusted(-2, -2, 2, 10)
-            if bubble_hit.contains(point):
-                return True
-
+    def _interactive_body_rect(self) -> Optional[QRect]:
+        """Logical hit rectangle shared by event filtering and the native mask."""
         dpr = self._current_dpr()
         stage_size = self._stage_logical_size(dpr)
         scale = stage_size / self.STAGE_SIZE
         if scale <= 0:
-            return False
+            return None
         stage_x = (self.width() - stage_size) / 2.0
         stage_y = self.profile.ground_y - stage_size + self._foot_inset * scale
         name, src_x_offset, src_y_offset = self._current_render_spec()
         extents = self._pose_extents(name if name in self.sprite_images else "idle")
         if extents is None:
-            return False
+            return None
         left, top, right, bottom = extents
         # Use the pose's visible bounding box instead of exact alpha pixels.
         # Pixel-level hit testing made holes between limbs click-through, so a
         # drag could fail depending on the exact pixel pressed.
         grab_pad = 4
-        hit_left = stage_x + (self.SPRITE_X + src_x_offset + left - grab_pad) * scale
-        hit_top = stage_y + (self.SPRITE_Y + src_y_offset + top - grab_pad) * scale
-        hit_right = stage_x + (self.SPRITE_X + src_x_offset + right + 1 + grab_pad) * scale
-        hit_bottom = stage_y + (self.SPRITE_Y + src_y_offset + bottom + 1 + grab_pad) * scale
-        return hit_left <= point.x() < hit_right and hit_top <= point.y() < hit_bottom
+        hit_left = math.floor(
+            stage_x + (self.SPRITE_X + src_x_offset + left - grab_pad) * scale
+        )
+        hit_top = math.floor(
+            stage_y + (self.SPRITE_Y + src_y_offset + top - grab_pad) * scale
+        )
+        hit_right = math.ceil(
+            stage_x
+            + (self.SPRITE_X + src_x_offset + right + 1 + grab_pad) * scale
+        )
+        hit_bottom = math.ceil(
+            stage_y
+            + (self.SPRITE_Y + src_y_offset + bottom + 1 + grab_pad) * scale
+        )
+        return QRect(
+            hit_left,
+            hit_top,
+            max(1, hit_right - hit_left),
+            max(1, hit_bottom - hit_top),
+        ).intersected(self.rect())
 
-    def _update_click_through(self) -> None:
-        """Let mouse input fall through the window's transparent padding.
+    def _active_bubble_hit_rect(self) -> Optional[QRect]:
+        if (
+            self._last_bubble_rect is None
+            or not self.message
+            or time.monotonic() > self.message_until
+        ):
+            return None
+        return self._last_bubble_rect.adjusted(-2, -2, 2, 10).intersected(
+            self.rect()
+        )
 
-        The window is much larger than the drawn character, and Qt's translucent
-        windows still swallow clicks on their fully transparent areas -- so the
-        invisible padding used to block clicks meant for whatever sits under it.
-        Toggled from the animation tick: the window turns solid again within one
-        tick (~140ms) of the cursor reaching the sprite or the speech bubble.
+    def _is_interactive_point(self, point: QPoint) -> bool:
+        """Only the visible pet and speech bubble should consume desktop input."""
+        bubble_hit = self._active_bubble_hit_rect()
+        if bubble_hit is not None and bubble_hit.contains(point):
+            return True
+        body_hit = self._interactive_body_rect()
+        return body_hit is not None and body_hit.contains(point)
+
+    def _update_input_mask(self) -> None:
+        """Keep visible content clickable and transparent padding click-through.
+
+        A permanent QRegion has no cursor-entry race: Windows never routes input
+        to padding outside the mask, while the pet body is interactive on the
+        very first press. During a grab or throw, retain the full window region
+        so native mouse capture cannot be clipped mid-gesture.
         """
-        if sys.platform != "win32":
+        if not self.isVisible():
             return
-        if self.held or self.dragging or self.falling:
-            interactive = True  # never go transparent mid-grab / mid-flight
-        else:
-            interactive = self._is_interactive_point(self.mapFromGlobal(QCursor.pos()))
-        self._apply_click_through(not interactive)
+        bubble_hit = self._active_bubble_hit_rect()
+        body_hit = self._interactive_body_rect()
+        full_window = self.debug_bounds or self.held or self.dragging or self.falling
+        signature = (
+            self.size().width(),
+            self.size().height(),
+            full_window,
+            body_hit.getRect() if body_hit is not None else None,
+            bubble_hit.getRect() if bubble_hit is not None else None,
+        )
+        if signature == self._input_mask_signature:
+            return
 
-    def _apply_click_through(self, enabled: bool) -> None:
-        if enabled == self._click_through:
-            return
+        region = QRegion(self.rect()) if full_window else QRegion()
+        if not full_window and body_hit is not None:
+            region = region.united(QRegion(body_hit))
+        if not full_window and bubble_hit is not None:
+            region = region.united(QRegion(bubble_hit))
+        if region.isEmpty():
+            # Required art should always yield a body rectangle. Fail open for
+            # input if a platform reports incomplete geometry, so the pet never
+            # becomes visible but unreachable.
+            region = QRegion(self.rect())
         try:
-            hwnd = ctypes.c_void_p(int(self.winId()))
-            user32 = ctypes.windll.user32
-            user32.GetWindowLongPtrW.restype = ctypes.c_ssize_t
-            user32.GetWindowLongPtrW.argtypes = [ctypes.c_void_p, ctypes.c_int]
-            user32.SetWindowLongPtrW.restype = ctypes.c_ssize_t
-            user32.SetWindowLongPtrW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_ssize_t]
-            GWL_EXSTYLE = -20
-            WS_EX_TRANSPARENT = 0x20
-            style = user32.GetWindowLongPtrW(hwnd, GWL_EXSTYLE)
-            new_style = style | WS_EX_TRANSPARENT if enabled else style & ~WS_EX_TRANSPARENT
-            if new_style != style:
-                user32.SetWindowLongPtrW(hwnd, GWL_EXSTYLE, new_style)
-            self._click_through = enabled
-        except Exception:
-            pass
+            self._input_mask_signature = signature
+            self.setMask(region)
+        except Exception as exc:
+            self._input_mask_signature = None
+            logger.debug("Could not update companion input mask: %s", exc)
 
     def _wrap_cn(self, text: str, max_chars: int = 12) -> list[str]:
         text = text.strip()
@@ -1159,14 +1557,21 @@ class SpritePetWindow(QWidget):
 
     # ---------- activity intensity (merged wander + quiet) ----------
     @property
+    def _focus_active(self) -> bool:
+        return self._focus_deadline > time.monotonic()
+
+    def _focus_remaining_seconds(self) -> float:
+        return max(0.0, self._focus_deadline - time.monotonic())
+
+    @property
     def _lively(self) -> bool:
         """High activity: strolls, talks, livelier beats."""
-        return self.settings.activity == "high"
+        return self.settings.activity == "high" and not self._focus_active
 
     @property
     def _quiet(self) -> bool:
         """Low activity: stays put, keeps speech to itself."""
-        return self.settings.activity == "low"
+        return self.settings.activity == "low" or self._focus_active
 
     @property
     def _is_night(self) -> bool:
@@ -1175,12 +1580,137 @@ class SpritePetWindow(QWidget):
         Single source of truth so these never leak into broad daylight."""
         return self._hour >= 23 or self._hour < 6
 
+    # ---------- focus companion ----------
+    def _arm_focus_timers(self) -> None:
+        remaining = self._focus_remaining_seconds()
+        if remaining <= 0.0:
+            self._focus_timer.stop()
+            self._focus_status_timer.stop()
+            return
+        self._focus_timer.start(max(1, int(math.ceil(remaining * 1000.0))))
+        if self._runtime_active:
+            self._focus_status_timer.start()
+
+    def _start_focus(self, minutes: int) -> None:
+        if self._focus_active:
+            self.say("这一段还在进行，先陪你完成它。", 3.0, force=True)
+            return
+        self._focus_completed_pending = False
+        minutes = max(1, min(90, int(minutes)))
+        settings_saved = True
+        if not self.settings.enabled:
+            self.settings.enabled = True
+            self.act_enabled.setChecked(True)
+            settings_saved = self._persist_settings(notify_failure=False)
+        self._set_runtime_active(True)
+
+        seconds = minutes * 60
+        self._focus_deadline = time.monotonic() + seconds
+        self._state.focus_until = time.time() + seconds
+        self._state.focus_planned_minutes = minutes
+        self.walking = False
+        self.walk_target_x = None
+        self._teleport_target = None
+        self._teleport_timer.stop()
+        if self._resource_busy:
+            self._leave_resource_state()
+        self._busy_samples = self._memory_samples = self._vram_samples = 0
+        self._arm_focus_timers()
+        state_saved = self._save_state(notify_failure=False)
+
+        pose = "read" if "read" in self.sprite_images else "sit"
+        self._set_action(pose, 3.0, force=True)
+        if state_saved:
+            line = f"好，陪你专注 {minutes} 分钟。"
+        else:
+            line = "专注已开始，但无法保存；退出后不会继续这次计时。"
+        self.say(line, 4.2 if not state_saved else 3.4, force=True)
+        self._refresh_tray_status()
+        if not settings_saved:
+            self._notify_persistence_failure(
+                "显示偏好仅在本次运行中生效，未能保存到本地。"
+            )
+
+    def _finish_focus(self, *, completed: bool) -> None:
+        was_focusing = self._focus_deadline > 0.0 or self._state.focus_until > 0.0
+        planned_minutes = self._state.focus_planned_minutes
+        if completed and was_focusing:
+            if planned_minutes <= 0:
+                planned_minutes = max(
+                    1,
+                    min(
+                        90,
+                        int(
+                            math.ceil(
+                                self._focus_remaining_seconds() / 60.0
+                            )
+                        ),
+                    ),
+                )
+            self._state.record_focus_completion(planned_minutes)
+        self._focus_deadline = 0.0
+        self._state.focus_until = 0.0
+        self._state.focus_planned_minutes = 0
+        self._focus_timer.stop()
+        self._focus_status_timer.stop()
+        if not was_focusing:
+            self._refresh_tray_status()
+            return
+
+        state_saved = self._save_state(notify_failure=False)
+        if completed:
+            self._focus_completed_pending = True
+            if self._runtime_active:
+                pose = "star" if "star" in self.sprite_images else "happy"
+                self._set_action(pose, 3.2, force=True)
+                line = (
+                    f"这一段完成啦，手账记下了 {planned_minutes} 分钟。"
+                    if state_saved
+                    else "这一段完成啦；但陪伴记录暂时无法保存。"
+                )
+                self.say(line, 4.2 if not state_saved else 3.6, force=True)
+            try:
+                if self._probe_tray_available():
+                    self.tray.showMessage(
+                        "专注结束",
+                        (
+                            f"手账已记下这次 {planned_minutes} 分钟专注。"
+                            if state_saved
+                            else "这一段完成啦，但陪伴记录暂时无法保存。"
+                        ),
+                        QSystemTrayIcon.MessageIcon.Information,
+                        5000,
+                    )
+            except Exception:
+                pass
+        else:
+            self._focus_completed_pending = False
+        if not completed and self._runtime_active:
+            self._set_action(
+                "sit" if "sit" in self.sprite_images else "idle",
+                1.8,
+                force=True,
+            )
+            line = (
+                "好，专注陪伴结束啦。"
+                if state_saved
+                else "本次专注已结束，但结束状态暂时无法保存。"
+            )
+            self.say(line, 4.0 if not state_saved else 2.2, force=True)
+        self._refresh_tray_status()
+
+    def _complete_focus(self) -> None:
+        self._finish_focus(completed=True)
+
+    def _cancel_focus(self) -> None:
+        self._finish_focus(completed=False)
+
     # ---------- state/actions ----------
     def say(self, msg: str, duration: float = 3.0, force: bool = False) -> None:
         if self._quiet and not force:
             return
         self.message = msg
-        self.message_until = time.time() + duration
+        self.message_until = time.monotonic() + duration
         self.update()
 
     def _set_action(
@@ -1190,7 +1720,7 @@ class SpritePetWindow(QWidget):
         message: Optional[str] = None,
         force: bool = False,
     ) -> None:
-        now = time.time()
+        now = time.monotonic()
         if (
             not force
             and self.action.until > now
@@ -1209,6 +1739,14 @@ class SpritePetWindow(QWidget):
 
     # ---------- the brain: sensing -> mood -> behavior ----------
     def _on_telemetry(self, t: Telemetry) -> None:
+        # A stop request crosses threads asynchronously. Drop any queued sample
+        # after the user disables awareness or temporarily hides the pet.
+        if not self._runtime_active or not self.settings.system_awareness:
+            return
+        age = time.monotonic() - t.captured_at
+        if age > 10.0:
+            logger.debug("Dropped stale telemetry sample (age %.1fs)", age)
+            return
         self._telemetry_samples += 1
         self._last_telemetry = t
         self._cpu, self._mem, self._gpu = t.cpu, t.mem, t.gpu
@@ -1222,20 +1760,35 @@ class SpritePetWindow(QWidget):
         target = machine_load(t.cpu, t.mem, t.gpu)
         self._load += (target - self._load) * 0.5
 
+        if self._focus_active:
+            if self._resource_busy:
+                self._leave_resource_state()
+            self._busy_samples = self._memory_samples = self._vram_samples = 0
+            self._refresh_tray_status()
+            return
+
         # Require several consecutive busy samples, then react deterministically.
         # This stays calm during spikes while making a real sustained load visible.
         # CPU is sampled every 2s. Require four genuinely high readings so a
         # launch spike or foreground app switch does not look like distress.
-        if t.cpu >= 85:
+        if not t.cpu_sampled:
+            self._busy_samples = 0
+        elif t.cpu >= 85:
             self._busy_samples += 1
         elif t.cpu < 70:
             self._busy_samples = 0
+        else:
+            self._busy_samples = max(0, self._busy_samples - 1)
         # Memory pressure is only noteworthy near exhaustion, not merely because
         # a large app keeps a healthy working set.
-        if t.mem >= 96:
+        if not t.mem_sampled:
+            self._memory_samples = 0
+        elif t.mem >= 96:
             self._memory_samples += 1
         elif t.mem < 92:
             self._memory_samples = 0
+        else:
+            self._memory_samples = max(0, self._memory_samples - 1)
         # Only count fresh nvidia-smi readings. Cached GPU values previously
         # turned one brief peak into three fake "sustained" samples.
         if t.gpu_sampled:
@@ -1251,6 +1804,8 @@ class SpritePetWindow(QWidget):
                 self._vram_samples += 1
             elif t.gpu is None or t.gpu < 40:
                 self._vram_samples = 0
+            else:
+                self._vram_samples = max(0, self._vram_samples - 1)
         self._update_resource_state(t)
         if self._batt is not None and not self._plugged and self._batt <= 18:
             self._react(
@@ -1261,9 +1816,9 @@ class SpritePetWindow(QWidget):
                 lines=("唔…有点没力气了。",),
             )
 
-        self.tray.setToolTip(f"月壳游灵 · {self._mood_phrase()}")
+        self._refresh_tray_status()
         if self._telemetry_samples % 15 == 0:
-            logger.info(
+            logger.debug(
                 "Telemetry healthy: cpu=%.1f gpu=%s vram=%s mem=%.1f idle=%.1fs",
                 t.cpu,
                 "n/a" if t.gpu is None else f"{t.gpu:.1f}",
@@ -1311,7 +1866,7 @@ class SpritePetWindow(QWidget):
             self._resource_recovery_samples = 0
 
     def _enter_resource_state(self, kind: str, pose: str, text: str) -> None:
-        now = time.time()
+        now = time.monotonic()
         self._resource_busy = True
         self._resource_alert_kind = kind
         self._resource_alert_priority = {"memory": 1, "load": 2, "vram": 3}.get(kind, 1)
@@ -1339,7 +1894,7 @@ class SpritePetWindow(QWidget):
         self._vram_samples = 0
         self._resource_recovery_samples = 0
         self._vram_stale_samples = 0
-        if self._resource_message_active and time.time() <= self.message_until:
+        if self._resource_message_active and time.monotonic() <= self.message_until:
             self.message = ""
             self.message_until = 0.0
         self._resource_message_active = False
@@ -1362,8 +1917,14 @@ class SpritePetWindow(QWidget):
         but feels like it remembers you."""
         absence = self._startup_absence
         hour = self._hour
+        if self._focus_active:
+            minutes = max(
+                1,
+                int(math.ceil(self._focus_remaining_seconds() / 60.0)),
+            )
+            return "read", f"我还在，继续安静陪你专注。还剩约 {minutes} 分钟。"
         if absence < 0:
-            return "wave", "初次见面，请多关照。"     # first launch ever
+            return "wave", "初次见面。点点或拖动我；右键或托盘可打开设置与隐私。"
         if absence < 180:                              # just restarted (<3 min)
             return "idle", "嗯，我回来了。"
         if absence >= 20 * 3600:                       # a day or more away
@@ -1376,19 +1937,43 @@ class SpritePetWindow(QWidget):
                 return "wave", "晚上好呀。"
         return "wave", random.choice(self.GREETINGS)
 
-    def _save_state(self) -> None:
+    def _save_state(self, *, notify_failure: bool = True) -> bool:
+        if self._settings_dirty:
+            self._persist_settings()
         self._state.energy = self.mood.energy
         self._state.mood = self.mood.mood
         self._state.sleepiness = self.mood.sleepiness
-        self._state.save()
+        was_failed = self._state_save_failed
+        if self._state_path is None:
+            result = self._state.save()
+        else:
+            result = self._state.save(self._state_path)
+        saved = result is not False
+        self._state_save_failed = not saved
+        if saved and was_failed:
+            self._refresh_tray_status()
+        elif not saved and notify_failure and not was_failed:
+            self._notify_persistence_failure(
+                "陪伴记忆暂时无法保存；重启后可能无法延续。"
+            )
+        return saved
 
     def _on_clipboard(self) -> None:
-        now = time.time()
+        if (
+            not self._runtime_active
+            or not self.settings.clipboard_reactions
+            or self._focus_active
+        ):
+            return
+        now = time.monotonic()
         if now - self._last_clip_react < 20:
             return
         clip = QApplication.clipboard()
         try:
-            if not (clip and clip.text()):
+            # Only inspect the advertised MIME type. The pet reacts to the act of
+            # copying and never needs to read or retain clipboard contents.
+            mime = clip.mimeData() if clip is not None else None
+            if mime is None or not mime.hasText():
                 return
         except Exception:
             return
@@ -1397,8 +1982,12 @@ class SpritePetWindow(QWidget):
         self._react("notify", 0.7, "copy", 20)  # a quiet "noticed that"
 
     def _update_brain(self, now: float) -> None:
-        dt = min(0.5, now - self._last_brain_t)
+        dt = max(0.0, min(0.5, now - self._last_brain_t))
         self._last_brain_t = now
+        if self.frame % 50 == 0:
+            # Time-of-day behavior must keep working when hardware awareness is
+            # disabled and no telemetry snapshots are arriving.
+            self._hour = time.localtime().tm_hour
 
         cp = QCursor.pos()
         speed = math.hypot(cp.x() - self._cursor_pos.x(),
@@ -1464,14 +2053,17 @@ class SpritePetWindow(QWidget):
         """Fire a state-driven beat, rate-limited per kind and mostly silent.
 
         Returns True if it actually played (so the idle loop yields to it)."""
-        now = time.time()
+        now = time.monotonic()
+        if self._focus_active and not force:
+            return False
         if self.held or self.dragging or self.falling:
             return False
         if not force and self.walking:
             return False
         if not force and self.action.until > now and self.action.locked:
             return False
-        if now - self._react_last.get(kind, 0) < cooldown:
+        last_reaction = self._react_last.get(kind)
+        if last_reaction is not None and now - last_reaction < cooldown:
             return False
         self._react_last[kind] = now
         self.last_idle_action = now
@@ -1481,8 +2073,66 @@ class SpritePetWindow(QWidget):
         self._set_action(pose, secs, msg, force=force)
         return True
 
+    def _maybe_moon_phase_reaction(self) -> bool:
+        """Play a quiet, once-per-event beat near the four principal phases."""
+        if self._quiet:
+            return False
+        now = time.monotonic()
+        if now < self._next_moon_phase_check:
+            return False
+        phase = calculate_moon_phase()
+        # The lunar state changes slowly. Avoid doing even this small
+        # calculation on every 140 ms animation frame.
+        self._next_moon_phase_check = now + 30 * 60
+        event_key = phase.principal_event_key(within_days=0.75)
+        if (
+            event_key is None
+            or event_key == self._state.last_moon_event_key
+        ):
+            return False
+        pose, line = {
+            0: (
+                "sleepy",
+                "今天接近新月。月光藏起来休息了。",
+            ),
+            2: (
+                "hover",
+                "今天接近上弦月，月光正慢慢长起来。",
+            ),
+            4: (
+                "moon" if "moon" in self.sprite_images else "star",
+                "今天接近满月。抬头的时候，也许会想起我。",
+            ),
+            6: (
+                "sit",
+                "今天接近下弦月。月光正慢慢收拢。",
+            ),
+        }[phase.index]
+        if pose not in self.sprite_images:
+            pose = "idle"
+        reacted = self._react(
+            pose,
+            2.8,
+            "moon_phase",
+            6 * 3600,
+        )
+        if not reacted:
+            self._next_moon_phase_check = now + 5 * 60
+            return False
+
+        self.say(line, 4.2)
+        self._next_moon_phase_check = now + 6 * 3600
+        previous_key = self._state.last_moon_event_key
+        self._state.last_moon_event_key = event_key
+        if not self._save_state(notify_failure=False):
+            # Do not consume the event when its marker could not be persisted.
+            self._state.last_moon_event_key = previous_key
+        return True
+
     def _maybe_life_reactions(self, now: float) -> bool:
         """The handful of crisp, companion-y moments worth noticing explicitly."""
+        if self._focus_active:
+            return False
         hour = self._hour
         night = self._is_night
 
@@ -1493,22 +2143,48 @@ class SpritePetWindow(QWidget):
 
         # deep night, settled in -> drifts off (once per night)
         if night and not self._slept_tonight and self.mood.sleepiness > 0.7 and self._idle_sec > 8:
-            self._slept_tonight = True
-            return self._react("sleep", 3.6, "night", 300,
-                               lines=("夜深了…我先眯一会儿。", "困了呢，晚安。"))
+            reacted = self._react(
+                "sleep",
+                3.6,
+                "night",
+                300,
+                lines=("夜深了…我先眯一会儿。", "困了呢，晚安。"),
+            )
+            if reacted:
+                self._slept_tonight = True
+            return reacted
         if not night:
             self._slept_tonight = False
 
         # morning hello, once a day
         today = time.localtime().tm_yday
         if 6 <= hour < 10 and self._greeted_morning_day != today and self._idle_sec < 30:
-            self._greeted_morning_day = today
-            return self._react("wave", 1.8, "morning", 300, lines=("早呀。", "天亮啦。"))
+            reacted = self._react(
+                "wave",
+                1.8,
+                "morning",
+                300,
+                lines=("早呀。", "天亮啦。"),
+            )
+            if reacted:
+                self._greeted_morning_day = today
+            return reacted
 
         # dusk wind-down, once a day -- a calm "evening's coming" beat
         if 18 <= hour < 21 and self._dusk_day != today and self._idle_sec < 60:
-            self._dusk_day = today
-            return self._react("hover", 1.8, "dusk", 300, lines=("天要黑了呢。", "黄昏了，慢下来吧。"))
+            reacted = self._react(
+                "hover",
+                1.8,
+                "dusk",
+                300,
+                lines=("天要黑了呢。", "黄昏了，慢下来吧。"),
+            )
+            if reacted:
+                self._dusk_day = today
+            return reacted
+
+        if self._maybe_moon_phase_reaction():
+            return True
 
         # left alone a long time -> nods off
         if self._idle_sec > 100 and self.mood.sleepiness > 0.5:
@@ -1516,8 +2192,16 @@ class SpritePetWindow(QWidget):
 
         # been present a long unbroken stretch -> a gentle "stretch" nudge
         if self._active_streak > 50 * 60:
-            self._active_streak = 0.0
-            return self._react("hover", 2.0, "stretch", 600, lines=("坐好久了，伸个懒腰吧。",))
+            reacted = self._react(
+                "hover",
+                2.0,
+                "stretch",
+                600,
+                lines=("坐好久了，伸个懒腰吧。",),
+            )
+            if reacted:
+                self._active_streak = 0.0
+            return reacted
 
         return False
 
@@ -1525,9 +2209,9 @@ class SpritePetWindow(QWidget):
         self.frame += 1
         if not self.isVisible():   # disabled / hidden -> let the brain idle too
             return
-        now = time.time()
+        now = time.monotonic()
         self._update_brain(now)
-        self._update_click_through()
+        self._update_input_mask()
 
         # While picked up, thrown, or actively dragged, the physics loop / mouse
         # owns the position; just keep the dangle animation ticking.
@@ -1552,8 +2236,10 @@ class SpritePetWindow(QWidget):
 
     def _maybe_notice_cursor(self, now: float) -> None:
         """Perk up when the cursor approaches the sprite itself (not the window)."""
+        if self._focus_active:
+            return
         cp = QCursor.pos()
-        center = self.geometry().center()
+        center = self._character_center_global()
         near = math.hypot(cp.x() - center.x(), cp.y() - center.y()) < self.NEAR_RADIUS
         if near and not self._cursor_was_near and now - self._last_glance > 6.0:
             self._last_glance = now
@@ -1578,6 +2264,30 @@ class SpritePetWindow(QWidget):
                 self.mood.curiosity = min(1.0, self.mood.curiosity + 0.2)
                 self._set_action("curious", seconds=1.1)
         self._cursor_was_near = near
+
+    def _character_center_global(self) -> QPoint:
+        """Center of the currently visible pose, in global logical coordinates."""
+        dpr = self._current_dpr()
+        stage_size = self._stage_logical_size(dpr)
+        scale = stage_size / self.STAGE_SIZE
+        stage_x = (self.width() - stage_size) / 2.0
+        stage_y = self.profile.ground_y - stage_size + self._foot_inset * scale
+        name, x_offset, y_offset = self._current_render_spec()
+        extents = self._pose_extents(name if name in self.sprite_images else "idle")
+        if extents is None:
+            return self.geometry().center()
+        left, top, right, bottom = extents
+        local = QPoint(
+            round(
+                stage_x
+                + (self.SPRITE_X + x_offset + (left + right + 1) / 2.0) * scale
+            ),
+            round(
+                stage_y
+                + (self.SPRITE_Y + y_offset + (top + bottom + 1) / 2.0) * scale
+            ),
+        )
+        return self.mapToGlobal(local)
 
     def _side_glance_pose(self, cursor_x: int, center_x: int) -> str:
         if cursor_x < center_x and "look_side_flip" in self.sprite_images:
@@ -1620,6 +2330,30 @@ class SpritePetWindow(QWidget):
         m = self.mood
         night = self._is_night
 
+        if self._focus_active:
+            # A deliberately narrow, low-motion whitelist: it remains present
+            # without turning the focus timer into another source of distraction.
+            focus_pool = [
+                (name, weight)
+                for name, weight in (
+                    ("read", 3.0),
+                    ("write", 1.4),
+                    ("sit", 1.8),
+                    ("blink", 0.7),
+                )
+                if name in self.sprite_images
+            ]
+            kind = random.choices(
+                [name for name, _ in focus_pool],
+                [weight for _, weight in focus_pool],
+            )[0]
+            self._set_action(
+                kind,
+                seconds=0.24 if kind == "blink" else random.uniform(2.4, 4.0),
+            )
+            self._next_idle_gap = random.uniform(20.0, 45.0)
+            return
+
         # ----- coherence gate: a sleepy pet shouldn't pop up to walk and grin -----
         # Deep in sleep it only stirs softly; it won't stroll or play until
         # something (you, the morning) actually wakes it back up.  At night it may
@@ -1636,7 +2370,7 @@ class SpritePetWindow(QWidget):
             sleep_pool = [(n, w) for (n, w) in sleep_pool
                           if self.SPRITE_MAP.get(n, n) in self.sprite_images]
             kind = random.choices([n for n, _ in sleep_pool], [w for _, w in sleep_pool])[0]
-            secs = 0.5 if kind == "blink" else random.uniform(3.0, 5.0)
+            secs = 0.24 if kind == "blink" else random.uniform(3.0, 5.0)
             self._set_action(kind, seconds=secs)
             self._next_idle_gap = random.uniform(6.0, 12.0)
             return
@@ -1693,8 +2427,6 @@ class SpritePetWindow(QWidget):
             ("magic", (0.05 + 0.9 * m.mood * m.energy) * wake),
             ("twirl", (0.04 + 0.8 * m.mood * m.energy) * wake),
             ("star", (0.04 + 0.7 * m.mood * m.energy) * wake),
-            ("crystal", (0.04 + 0.7 * m.mood * m.energy) * wake),
-            ("gift", (0.02 + 0.5 * m.mood * m.attention) * wake),
             # riding the crescent moon is a night-only beat -- never in daylight
             ("moon", (0.5 * (0.4 + 0.8 * m.sleepiness)) if night else 0.0),
             # tucked against a screen edge -> occasionally peeks over the side
@@ -1711,11 +2443,11 @@ class SpritePetWindow(QWidget):
         kind = random.choices([n for n, _ in pool], [w for _, w in pool])[0]
 
         if kind == "blink":
-            secs = 0.5
+            secs = 0.24
         elif kind in ("sleep", "sleepy", "yawn"):
             secs = random.uniform(2.2, 3.6)
         elif kind in ("read", "write", "magic", "twirl", "moon", "flame",
-                      "star", "crystal", "gift"):
+                      "star"):
             secs = random.uniform(2.2, 3.4)  # special beats linger to be enjoyed
         else:
             secs = random.uniform(1.1, 2.2)
@@ -1770,7 +2502,7 @@ class SpritePetWindow(QWidget):
             return False
         self._teleport_target = target
         self._set_action("teleport", 1.0, force=True)  # vanish beat at the origin
-        QTimer.singleShot(520, self._finish_teleport)
+        self._teleport_timer.start()
         return True
 
     def _finish_teleport(self) -> None:
@@ -1781,10 +2513,10 @@ class SpritePetWindow(QWidget):
             return  # grabbed mid-spell -- stay where the hand put us
         min_x, max_x = self._x_bounds()
         self.move(max(min_x, min(target, max_x)), self._rest_y())
-        self._save_position()
+        self._save_position(persist=False)
         line = random.choice(("……嗖。", "抄了个近道。")) if random.random() < 0.3 else None
         self._set_action("teleport", 0.8, line, force=True)  # reappearance beat
-        self.last_idle_action = time.time()
+        self.last_idle_action = time.monotonic()
         self._was_parked = self._is_parked()
         self.update()
 
@@ -1836,9 +2568,9 @@ class SpritePetWindow(QWidget):
         self.walking = False
         self._dashing = False
         self.walk_target_x = None
-        self._save_position()
+        self._save_position(persist=False)
         self._check_park_transition()
-        self.last_idle_action = time.time()
+        self.last_idle_action = time.monotonic()
         self._next_idle_gap = random.uniform(5.0, 11.0)
 
     # ---------- pick-up / throw physics ----------
@@ -1848,7 +2580,7 @@ class SpritePetWindow(QWidget):
             self.phys_timer.stop()
             return
 
-        now = time.perf_counter()
+        now = time.monotonic()
         dt = max(0.008, min(0.050, now - self._last_phys_t))
         self._last_phys_t = now
         tick_scale = dt / 0.016
@@ -1892,7 +2624,7 @@ class SpritePetWindow(QWidget):
         peak, self._fall_peak = self._fall_peak, 0.0
         shaken, self._shaken = self._shaken, False
         self._save_position()
-        self.last_idle_action = time.time()
+        self.last_idle_action = time.monotonic()
         self._next_idle_gap = random.uniform(4.0, 9.0)
         # A gentle drop is a cheer; a hard slam dizzies it -- and a really rough
         # toss sometimes flares it up in a little huff of flame instead.
@@ -1908,9 +2640,64 @@ class SpritePetWindow(QWidget):
         # stroll into/out of the corner still triggers correctly
         self._was_parked = self._is_parked()
 
+    def _award_daily_gift(self) -> tuple[str, str, float] | None:
+        """Claim today's moonlight once and return its presentation."""
+
+        today_key = time.strftime("%Y-%m-%d")
+        last_gift = self._state.last_gift_date
+        if last_gift and today_key < last_gift:
+            self._state.last_gift_date = today_key
+            self._gift_clock_guarded_day = today_key
+            self._gift_clock_notice_shown = False
+            self._save_state()
+            return None
+        if last_gift and today_key == last_gift:
+            return None
+
+        self._gift_day = time.localtime().tm_yday
+        self._state.last_gift_date = today_key
+        self._state.moon_tokens = min(1_000_000, self._state.moon_tokens + 1)
+        if self._state.moon_tokens % 7 == 0:
+            crystal_number = self._state.moon_tokens // 7
+            pose = "crystal" if "crystal" in self.sprite_images else "star"
+            line = (
+                f"第 {crystal_number} 颗星晶凝成啦！"
+                f"月光已经有 {self._state.moon_tokens} 枚。"
+            )
+        else:
+            pose = "gift" if "gift" in self.sprite_images else "happy"
+            line = random.choice(("给你留了一枚月光。", "喏，今天的月光。"))
+        return pose, line, 2.4
+
+    def _claim_daily_gift(self) -> tuple[str, str, float] | None:
+        """Award only when the updated memory was durably written."""
+
+        self._gift_save_failed = False
+        previous = (
+            self._state.last_gift_date,
+            self._state.moon_tokens,
+            self._gift_day,
+        )
+        gift = self._award_daily_gift()
+        if gift is None:
+            return None
+        if self._save_state(notify_failure=False):
+            return gift
+
+        (
+            self._state.last_gift_date,
+            self._state.moon_tokens,
+            self._gift_day,
+        ) = previous
+        self._gift_save_failed = True
+        self._refresh_tray_status()
+        return None
+
     def _on_pet(self) -> None:
         """A tap with no drag = a head pat; repeated pats escalate the reaction."""
-        now = time.time()
+        had_completed_focus = self._focus_completed_pending
+        self._focus_completed_pending = False
+        now = time.monotonic()
         if now - self._last_pet_t < 2.5:
             self._pet_count += 1
         else:
@@ -1918,12 +2705,24 @@ class SpritePetWindow(QWidget):
         self._last_pet_t = now
 
         secs = 1.1
-        today = time.localtime().tm_yday
-        if self._gift_day != today and "gift" in self.sprite_images:
+        gift_awarded = False
+        daily_gift = self._claim_daily_gift()
+        if daily_gift is not None:
             # First pat of the day: it's been saving a little something for you.
-            self._gift_day = today
-            line, pose = random.choice(("给你留了个小东西。", "喏，这个送你。")), "gift"
-            secs = 2.4  # let the little reveal play out
+            gift_awarded = True
+            pose, line, secs = daily_gift
+        elif self._gift_save_failed:
+            pose = "curious"
+            line = "这枚月光还没存好，暂时没有领取；请检查数据目录权限后重试。"
+            secs = 3.6
+        elif (
+            self._gift_clock_guarded_day == time.strftime("%Y-%m-%d")
+            and not self._gift_clock_notice_shown
+        ):
+            self._gift_clock_notice_shown = True
+            pose = "curious"
+            line = "检测到系统日期曾在未来；今天不重复发放，明天会恢复。"
+            secs = 3.2
         elif self._pet_count >= 6 and "twirl" in self.sprite_images:
             line, pose = random.choice(("嘿嘿，转个圈！", "你最好啦～")), "twirl"
             secs = 2.2  # let the happy spin play out
@@ -1942,11 +2741,46 @@ class SpritePetWindow(QWidget):
         self.mood.sleepiness = max(0.0, self.mood.sleepiness - 0.10)
         # A direct touch from you always lands, even mid-spell or mid-nap.
         self._set_action(pose, seconds=secs, message=line, force=True)
-        self._save_position()
+        if gift_awarded:
+            # The claim was saved before it was presented, preventing both a
+            # restart duplicate and a false success on a read-only data path.
+            self._refresh_tray_status()
+        elif had_completed_focus:
+            self._refresh_tray_status()
 
     # ---------- interaction ----------
+    def event(self, event) -> bool:  # type: ignore[override]
+        if (
+            event.type()
+            in (QEvent.Type.UngrabMouse, QEvent.Type.WindowDeactivate)
+            and getattr(self, "dragging", False)
+        ):
+            self._cancel_drag()
+        return super().event(event)
+
+    def _cancel_drag(self) -> None:
+        """Recover a consistent state if Windows/Qt takes mouse capture away."""
+        self.dragging = False
+        self.held = False
+        self._drag_history.clear()
+        self._shake_count = 0
+        self._shake_sign = 0
+        self.falling = False
+        self.phys_timer.stop()
+        if self.isVisible():
+            self.move(self.x(), self._rest_y())
+            self._save_position()
+        self.update()
+
+    def showEvent(self, event) -> None:  # type: ignore[override]
+        # Native window recreation drops the region mask and DWM hints.
+        self._input_mask_signature = None
+        self._disable_dwm_frame()
+        super().showEvent(event)
+        self._mask_timer.start()
+
     def enterEvent(self, event) -> None:  # type: ignore[override]
-        if time.time() - self.last_hover > 8:
+        if time.monotonic() - self.last_hover > 8:
             self.hover_timer.start()
         super().enterEvent(event)
 
@@ -1959,7 +2793,7 @@ class SpritePetWindow(QWidget):
         # inside the window's transparent padding.
         if not self._is_interactive_point(self.mapFromGlobal(QCursor.pos())):
             return
-        self.last_hover = time.time()
+        self.last_hover = time.monotonic()
         self._set_action("curious", seconds=1.3, message=None)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # type: ignore[override]
@@ -1969,6 +2803,11 @@ class SpritePetWindow(QWidget):
         self.walking = False
         self.walk_target_x = None
         if event.button() == Qt.MouseButton.LeftButton:
+            # Direct interaction cancels a pending delayed teleport. Otherwise a
+            # quick tap could finish before the callback and still blink the pet
+            # away from under the user's hand.
+            self._teleport_target = None
+            self._teleport_timer.stop()
             # cancel any in-flight fall and grab the pet
             self.falling = False
             self.phys_timer.stop()
@@ -1982,7 +2821,7 @@ class SpritePetWindow(QWidget):
             self._prev_drag_gp = gp
             self._drag_window_origin = self.pos()
             self._throw_vx = self._throw_vy = 0.0
-            now = time.perf_counter()
+            now = time.monotonic()
             self._drag_history = [(now, gp.x(), gp.y())]
             self._shake_sign = 0
             self._shake_count = 0
@@ -2002,7 +2841,7 @@ class SpritePetWindow(QWidget):
             self._throw_vx = float(step.x())
             self._throw_vy = float(step.y())
             self._prev_drag_gp = gp
-            now = time.perf_counter()
+            now = time.monotonic()
             self._drag_history.append((now, gp.x(), gp.y()))
             cutoff = now - 0.12
             self._drag_history = [sample for sample in self._drag_history if sample[0] >= cutoff]
@@ -2013,10 +2852,15 @@ class SpritePetWindow(QWidget):
                     self._shake_count += 1
                 self._shake_sign = s
 
-            ag = self._window_screen_available()
-            min_x, max_x = self._x_bounds()
+            target_screen = QApplication.screenAt(gp) or self._window_screen()
+            ag = (
+                target_screen.availableGeometry()
+                if target_screen is not None
+                else self._window_screen_available()
+            )
+            min_x, max_x = self._x_bounds(ag, self._screen_dpr(target_screen))
             top = ag.top() + 8
-            rest = self._rest_y()
+            rest = self._rest_y(ag)
             new_x = max(min_x, min(self._drag_window_origin.x() + total.x(), max_x))
             new_y = max(top, min(self._drag_window_origin.y() + total.y(), rest))
             self.move(new_x, new_y)
@@ -2029,12 +2873,25 @@ class SpritePetWindow(QWidget):
             shaken = self._shake_count >= 6
             self._shake_count = 0
             self._shake_sign = 0
-            if len(self._drag_history) >= 2:
+            released_at = time.monotonic()
+            cutoff = released_at - 0.12
+            self._drag_history = [
+                sample for sample in self._drag_history if sample[0] >= cutoff
+            ]
+            # A fast move followed by a pause is a placement, not a throw. Do not
+            # reuse an old velocity sample when the pointer stopped before release.
+            recent_motion = (
+                bool(self._drag_history)
+                and released_at - self._drag_history[-1][0] <= 0.08
+            )
+            if recent_motion and len(self._drag_history) >= 2:
                 first = self._drag_history[0]
                 last = self._drag_history[-1]
                 elapsed = max(0.001, last[0] - first[0])
                 self._throw_vx = (last[1] - first[1]) / elapsed * 0.016
                 self._throw_vy = (last[2] - first[2]) / elapsed * 0.016
+            else:
+                self._throw_vx = self._throw_vy = 0.0
             self._drag_history.clear()
             if not self.drag_started:
                 self._on_pet()  # a tap, not a drag -> head pat
@@ -2047,7 +2904,7 @@ class SpritePetWindow(QWidget):
                 self._fall_peak = 0.0
                 self._shaken = shaken    # land dizzy if it was being jiggled
                 self.falling = True
-                self._last_phys_t = time.perf_counter()
+                self._last_phys_t = time.monotonic()
                 self.phys_timer.start()
             elif shaken:
                 # jiggled in place -> dizzy, no fall needed
@@ -2062,7 +2919,7 @@ class SpritePetWindow(QWidget):
                 self.move(self.x(), self._rest_y())
                 self._save_position()
                 self._check_park_transition()
-                self.last_idle_action = time.time()
+                self.last_idle_action = time.monotonic()
             self.update()
         super().mouseReleaseEvent(event)
 
@@ -2081,27 +2938,1003 @@ class SpritePetWindow(QWidget):
         super().mouseDoubleClickEvent(event)
 
     # ---------- tray/menu ----------
-    def _toggle_enabled(self, checked: bool) -> None:
-        self.settings.enabled = checked
-        self.settings.save()
-        self.monitor.set_active(checked)
-        if checked:
+    def _notify_disabled_startup(self) -> None:
+        if self._shutdown_done or self._runtime_active:
+            return
+        try:
+            if self._probe_tray_available():
+                self.tray.showMessage(
+                    "MoonShell 当前已停用",
+                    "单击此通知或托盘图标即可重新显示月灵。",
+                    QSystemTrayIcon.MessageIcon.Information,
+                    7000,
+                )
+        except Exception:
+            pass
+
+    def _resolve_disabled_startup_without_tray(self) -> None:
+        if self._shutdown_done or self._runtime_active:
+            return
+        answer = QMessageBox.question(
+            self,
+            "MoonShell 当前已停用",
+            "MoonShell 记住了“停用”选择，但系统托盘目前不可用，"
+            "因此没有隐藏入口可以恢复。\n\n现在显示月灵吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            self._quit()
+            return
+
+        self._exit_for_missing_tray = False
+        self.settings.enabled = True
+        self.act_enabled.setChecked(True)
+        settings_saved = self._persist_settings(notify_failure=False)
+        self._set_runtime_active(True, snap=True)
+        self._set_action("wave", 2.4, force=True)
+        self.say("我回来啦。右键月灵仍可打开设置和退出。", 3.8, force=True)
+        if not settings_saved:
+            self._notify_persistence_failure(
+                "显示偏好仅在本次运行中生效，未能保存到本地。"
+            )
+
+    def _probe_tray_available(self) -> bool:
+        try:
+            available = bool(QSystemTrayIcon.isSystemTrayAvailable())
+        except Exception:
+            available = self._tray_available
+        if available and not self._tray_available:
+            self.tray.show()
+        self._tray_available = available
+        return available
+
+    def _check_hidden_tray(self) -> None:
+        if self._runtime_active or self._shutdown_done:
+            self._tray_watchdog.stop()
+            self._tray_missing_checks = 0
+            return
+        if self._probe_tray_available():
+            self._tray_missing_checks = 0
+            return
+        self._tray_missing_checks += 1
+        if self._tray_missing_checks < 2:
+            return
+        self._tray_missing_checks = 0
+        if not self.settings.enabled:
+            logger.warning(
+                "Tray disappeared while companion is disabled; exiting cleanly"
+            )
+            self._quit()
+            return
+        logger.warning("Tray disappeared while temporarily hidden; recalling the pet")
+        self._recall_pet(acknowledge_completion=False)
+
+    def _set_runtime_active(self, active: bool, *, snap: bool = False) -> None:
+        """Start/stop visible runtime work without changing the saved preference."""
+        self._runtime_active = active
+        self.monitor.set_active(active and self.settings.system_awareness)
+        if active:
+            self._tray_watchdog.stop()
+            self._tray_missing_checks = 0
+            self._last_brain_t = time.monotonic()
+            self._cursor_pos = QCursor.pos()
+            if not self.anim_timer.isActive():
+                self.anim_timer.start()
+            if not self.state_timer.isActive():
+                self.state_timer.start()
+            if self._focus_active:
+                self._arm_focus_timers()
+            if snap:
+                self._snap_to_taskbar(initial=False)
             self.show()
-            self._snap_to_taskbar(initial=False)
         else:
+            self._tray_missing_checks = 0
+            if not self._tray_watchdog.isActive():
+                self._tray_watchdog.start()
+            self.anim_timer.stop()
+            self.state_timer.stop()
+            self.hover_timer.stop()
+            self.phys_timer.stop()
+            self._focus_status_timer.stop()
+            self.walking = False
+            self.walk_target_x = None
+            self._teleport_target = None
+            self._teleport_timer.stop()
+            self.falling = False
+            self.dragging = False
+            self.held = False
+            self._drag_history.clear()
             self.hide()
+        self._refresh_tray_status()
+
+    def _toggle_enabled(self, checked: bool) -> None:
+        if not checked and not self._probe_tray_available():
+            self.settings.enabled = True
+            self.act_enabled.setChecked(True)
+            self._set_runtime_active(True)
+            self.say("系统托盘暂不可用，请从菜单选择“退出”。", 3.6, force=True)
+            return
+        self.settings.enabled = checked
+        settings_saved = self._persist_settings(notify_failure=False)
+        self.act_enabled.setChecked(checked)
+        if checked:
+            self._set_runtime_active(True, snap=True)
+        else:
+            self._set_runtime_active(False)
+            self._finish_focus(completed=False)
+        if not settings_saved:
+            self._notify_persistence_failure(
+                "显示偏好仅在本次运行中生效，重启后可能恢复原来的状态。"
+            )
+
+    def _toggle_visibility(self) -> None:
+        if self._runtime_active:
+            if not self._probe_tray_available():
+                self.say("系统托盘暂不可用，暂时不能隐藏我。", 3.2, force=True)
+                return
+            self._set_runtime_active(False)
+        else:
+            self._recall_pet()
+
+    def _recall_pet(self, *, acknowledge_completion: bool = True) -> None:
+        """Recover every transient state and place the pet on the primary screen."""
+        completed_focus = self._focus_completed_pending
+        if acknowledge_completion:
+            self._focus_completed_pending = False
+        settings_saved = True
+        if not self.settings.enabled:
+            self.settings.enabled = True
+            self.act_enabled.setChecked(True)
+            settings_saved = self._persist_settings(notify_failure=False)
+
+        self.collapsed = False
+        self.dragging = False
+        self.drag_started = False
+        self.held = False
+        self.falling = False
+        self.walking = False
+        self.walk_target_x = None
+        self._drag_history.clear()
+        self._teleport_target = None
+        self.phys_timer.stop()
+        self._teleport_timer.stop()
+
+        screen = QApplication.primaryScreen()
+        if screen is not None:
+            ag = screen.availableGeometry()
+            min_x, max_x = self._x_bounds(ag, self._screen_dpr(screen))
+            self.move(max(min_x, max_x - 50), self._rest_y(ag))
+        else:
+            self._snap_to_taskbar(initial=False, reset_x=True)
+
+        self._set_runtime_active(True)
+        self._save_position()
+        self.raise_()
+        if completed_focus:
+            pose, line = "star", "刚才那一段专注完成啦。"
+        elif self._focus_active:
+            pose, line = "read", "我在，继续陪你专注。"
+        else:
+            pose, line = "wave", "我在这里。"
+        self._set_action(pose, 1.8, force=True)
+        self.say(line, 2.2, force=True)
+        if not settings_saved:
+            self._notify_persistence_failure(
+                "显示偏好仅在本次运行中生效，未能保存到本地。"
+            )
+
+    def _show_usage_tip(self) -> None:
+        settings_saved = True
+        if not self._runtime_active:
+            if not self.settings.enabled:
+                self.settings.enabled = True
+                self.act_enabled.setChecked(True)
+                settings_saved = self._persist_settings(notify_failure=False)
+            self._set_runtime_active(True, snap=True)
+        self._set_action("wave", 3.4, force=True)
+        self.say(
+            "点点我可以摸头，按住可拖动；右键有设置，点托盘可唤回。",
+            5.0,
+            force=True,
+        )
+        if not settings_saved:
+            self._notify_persistence_failure(
+                "显示偏好仅在本次运行中生效，未能保存到本地。"
+            )
+
+    @staticmethod
+    def _moon_phase_phrase(phase: MoonPhase) -> str:
+        return (
+            "月光暂时藏起来休息，新的循环正要开始。"
+            if phase.index == 0
+            else "一弯细细的月光，正在一点点长大。"
+            if phase.index == 1
+            else "月光已经走到半途，今晚也在安静地亮着。"
+            if phase.index == 2
+            else "月面渐渐明亮，像一盏慢慢点亮的小灯。"
+            if phase.index == 3
+            else "今晚的月光最饱满，适合留下一点共同记忆。"
+            if phase.index == 4
+            else "月光开始收拢，夜色也跟着柔和下来。"
+            if phase.index == 5
+            else "月亮走过下弦，今晚的光比前几天安静一些。"
+            if phase.index == 6
+            else "这一轮月光快要睡着了，休息也算认真生活。"
+        )
+
+    def _companion_journal_html(self, phase: MoonPhase) -> str:
+        if self._state.normalize_focus_today():
+            self._save_state(notify_failure=False)
+        local_day = time.localtime()
+        date_text = (
+            f"{local_day.tm_year}年{local_day.tm_mon}月{local_day.tm_mday}日"
+        )
+        days = self._state.companionship_days()
+        tokens = self._state.moon_tokens
+        crystals = tokens // 7
+        until_crystal = 7 - (tokens % 7)
+        today_minutes = self._state.focus_today_minutes
+        sessions = self._state.focus_sessions_completed
+        total_minutes = self._state.focus_minutes_completed
+        focus_today = f"今日专注 <b>{today_minutes}</b> 分钟。"
+        return (
+            """
+            <style>
+              body { line-height: 1.45; }
+              h2 { margin: 2px 0 4px 0; }
+              h3 { margin: 14px 0 4px 0; }
+              p { margin: 4px 0; }
+              .muted { color: #707789; }
+              .memory {
+                background: #f4f1ff;
+                border-radius: 8px;
+                padding: 8px;
+              }
+            </style>
+            <h2>%s %s</h2>
+            <p class="muted">%s · 月龄约 %.1f 天 · 亮面约 %d%%</p>
+            <p>%s</p>
+            <div class="memory">
+              <p>相识第 <b>%d</b> 天</p>
+              <p>月光 <b>%d</b> 枚 · 星晶 <b>%d</b> 颗 ·
+                 下一颗还差 <b>%d</b> 枚月光</p>
+            </div>
+            <h3>一起专注过的时间</h3>
+            <p>%s</p>
+            <p>累计完成 <b>%d</b> 段 · <b>%d</b> 分钟</p>
+            <p class="muted">这里不计算连续打卡，也不会因为哪天没打开而扣掉什么。</p>
+            <h3>关于月相</h3>
+            <p class="muted">月相在本地近似计算，不读取定位、不联网；
+               它只负责陪伴氛围，不作为天文观测数据。</p>
+            <p class="muted">“保存今日卡片”会在本机生成 PNG；
+               卡片会包含日期、相识天数、月光、星晶和今日专注。
+               MoonShell 不主动上传；文件是否同步取决于保存位置和系统设置。</p>
+            """
+            % (
+                phase.emoji,
+                phase.name,
+                date_text,
+                phase.age_days,
+                round(phase.illumination * 100),
+                self._moon_phase_phrase(phase),
+                days,
+                tokens,
+                crystals,
+                until_crystal,
+                focus_today,
+                sessions,
+                total_minutes,
+            )
+        )
+
+    @staticmethod
+    def _daily_card_font(pixel_size: int, *, bold: bool = False) -> QFont:
+        families = set(QFontDatabase.families())
+        family = next(
+            (
+                candidate
+                for candidate in (
+                    "Microsoft YaHei UI",
+                    "Microsoft YaHei",
+                    "DengXian",
+                    "SimSun",
+                )
+                if candidate in families
+            ),
+            "",
+        )
+        if not family:
+            app = QApplication.instance()
+            family = app.font().family() if app is not None else "Sans Serif"
+        font = QFont(family)
+        font.setPixelSize(pixel_size)
+        font.setBold(bold)
+        return font
+
+    @staticmethod
+    def _draw_daily_card_moon(
+        painter: QPainter,
+        rect: QRect,
+        phase: MoonPhase,
+    ) -> None:
+        """Draw an eight-phase glyph without depending on an emoji font."""
+        light = QColor("#ffd86f")
+        shadow = QColor("#161936")
+        halo = QColor(255, 216, 111, 35)
+        painter.save()
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(halo)
+        painter.drawEllipse(rect.adjusted(-10, -10, 10, 10))
+
+        disc = QPainterPath()
+        disc.addEllipse(
+            float(rect.x()),
+            float(rect.y()),
+            float(rect.width()),
+            float(rect.height()),
+        )
+        painter.setClipPath(disc)
+        painter.fillPath(disc, QBrush(light))
+        painter.setBrush(shadow)
+        index = phase.index
+        if index == 0:
+            painter.fillPath(disc, QBrush(shadow))
+        elif index == 1:
+            painter.drawEllipse(rect.translated(-rect.width() // 3, 0))
+        elif index == 2:
+            painter.fillRect(
+                QRect(
+                    rect.left(),
+                    rect.top(),
+                    rect.width() // 2,
+                    rect.height(),
+                ),
+                shadow,
+            )
+        elif index == 3:
+            painter.drawEllipse(
+                QRect(
+                    rect.left() - rect.width() // 4,
+                    rect.top(),
+                    rect.width() // 2,
+                    rect.height(),
+                )
+            )
+        elif index == 5:
+            painter.drawEllipse(
+                QRect(
+                    rect.center().x() + rect.width() // 4,
+                    rect.top(),
+                    rect.width() // 2,
+                    rect.height(),
+                )
+            )
+        elif index == 6:
+            painter.fillRect(
+                QRect(
+                    rect.center().x(),
+                    rect.top(),
+                    rect.width() // 2 + 1,
+                    rect.height(),
+                ),
+                shadow,
+            )
+        elif index == 7:
+            painter.drawEllipse(rect.translated(rect.width() // 3, 0))
+        painter.restore()
+
+        painter.save()
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(QColor("#ffe9a7"), 3))
+        painter.drawEllipse(rect)
+        painter.restore()
+
+    def _build_daily_card(self, phase: MoonPhase | None = None) -> QImage:
+        """Render a shareable 1080px memory card without network or user data."""
+        phase = calculate_moon_phase() if phase is None else phase
+        self._state.normalize_focus_today()
+        days = self._state.companionship_days()
+        tokens = self._state.moon_tokens
+        crystals = tokens // 7
+        today_minutes = self._state.focus_today_minutes
+        local_day = time.localtime()
+        date_text = (
+            f"{local_day.tm_year}年{local_day.tm_mon}月{local_day.tm_mday}日"
+        )
+
+        card = QImage(1080, 1080, QImage.Format.Format_ARGB32)
+        background = QLinearGradient(0, 0, 1080, 1080)
+        background.setColorAt(0.0, QColor("#090a1b"))
+        background.setColorAt(0.55, QColor("#171b46"))
+        background.setColorAt(1.0, QColor("#291d52"))
+        card.fill(QColor("#090a1b"))
+        painter = QPainter(card)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.fillRect(card.rect(), QBrush(background))
+
+        # Deterministic geometry makes every day's card feel a little different
+        # and still changes in headless tests where no system fonts are loaded.
+        seed = (
+            local_day.tm_year * 10_000
+            + local_day.tm_mon * 100
+            + local_day.tm_mday
+            + days * 17
+            + phase.index * 101
+        )
+        painter.setPen(Qt.PenStyle.NoPen)
+        for index in range(64):
+            x = 24 + ((seed * 37 + index * 149 + index * index * 3) % 1032)
+            y = 24 + ((seed * 19 + index * 83 + index * index * 7) % 990)
+            radius = 2 + ((seed + index * 11) % 4)
+            alpha = 90 + ((seed + index * 29) % 150)
+            painter.setBrush(QColor(255, 222, 135, alpha))
+            painter.drawEllipse(QPoint(x, y), radius, radius)
+
+        painter.setBrush(QColor(40, 42, 83, 235))
+        painter.setPen(QPen(QColor(247, 221, 139, 120), 2))
+        painter.drawRoundedRect(QRect(580, 270, 430, 455), 34, 34)
+
+        title_font = self._daily_card_font(54, bold=True)
+        painter.setFont(title_font)
+        painter.setPen(QColor("#fff3c7"))
+        painter.drawText(
+            QRect(70, 58, 760, 78),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            "今日月灵",
+        )
+
+        body_font = self._daily_card_font(29)
+        painter.setFont(body_font)
+        painter.setPen(QColor("#cdd2ff"))
+        painter.drawText(72, 178, date_text)
+        self._draw_daily_card_moon(
+            painter,
+            QRect(840, 76, 54, 54),
+            phase,
+        )
+        painter.drawText(
+            QRect(905, 70, 105, 80),
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+            phase.name,
+        )
+        painter.setPen(QColor("#989fca"))
+        painter.drawText(
+            QRect(660, 150, 350, 55),
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+            f"亮面约 {round(phase.illumination * 100)}%",
+        )
+
+        poses = (
+            "sleepy",
+            "curious",
+            "read",
+            "magic",
+            "moon",
+            "star",
+            "sit",
+            "sleep",
+        )
+        pose = poses[phase.index]
+        sprite = self.sprite_images.get(
+            pose,
+            self.sprite_images.get("idle", QImage()),
+        )
+        if not sprite.isNull():
+            painter.setRenderHint(
+                QPainter.RenderHint.SmoothPixmapTransform,
+                False,
+            )
+            painter.drawImage(QRect(50, 220, 510, 510), sprite)
+
+        stat_font = self._daily_card_font(34, bold=True)
+        painter.setFont(stat_font)
+        painter.setPen(QColor("#fff6da"))
+        painter.drawText(630, 345, f"相识第 {days} 天")
+        painter.drawText(630, 445, f"月光 {tokens} 枚")
+        painter.drawText(630, 545, f"星晶 {crystals} 颗")
+        painter.drawText(630, 645, f"今日专注 {today_minutes} 分钟")
+
+        # Small geometric memory bars remain legible as decoration and ensure
+        # each local value has a visual effect even without a CJK font.
+        painter.setPen(Qt.PenStyle.NoPen)
+        memory_values = (
+            (days, 390, QColor("#ffd56f")),
+            (tokens, 490, QColor("#aeb8ff")),
+            (crystals, 590, QColor("#f3a8ff")),
+            (today_minutes, 690, QColor("#8de1d2")),
+        )
+        for value, y, color in memory_values:
+            width = 24 + min(310, int(math.log1p(max(0, value)) * 66))
+            painter.setBrush(QColor(255, 255, 255, 28))
+            painter.drawRoundedRect(QRect(630, y, 320, 10), 5, 5)
+            painter.setBrush(color)
+            painter.drawRoundedRect(QRect(630, y, width, 10), 5, 5)
+
+        quote_font = self._daily_card_font(34)
+        painter.setFont(quote_font)
+        painter.setPen(QColor("#f4eaff"))
+        painter.drawText(
+            QRect(90, 795, 900, 95),
+            Qt.AlignmentFlag.AlignCenter
+            | Qt.TextFlag.TextWordWrap,
+            self._moon_phase_phrase(phase),
+        )
+
+        footer_font = self._daily_card_font(22)
+        painter.setFont(footer_font)
+        painter.setPen(QColor("#8f96bd"))
+        painter.drawText(
+            QRect(70, 995, 940, 38),
+            Qt.AlignmentFlag.AlignCenter,
+            "MoonShell Spirit · 完全本地生成",
+        )
+        painter.end()
+        return card
+
+    def _save_daily_card(self) -> bool:
+        picture_locations = QStandardPaths.standardLocations(
+            QStandardPaths.StandardLocation.PicturesLocation
+        )
+        start_dir = (
+            Path(picture_locations[0])
+            if picture_locations
+            else Path.home()
+        )
+        default_name = f"MoonShell-{time.strftime('%Y-%m-%d')}.png"
+        selected, _selected_filter = QFileDialog.getSaveFileName(
+            getattr(self, "_companion_journal_dialog", self),
+            "保存今日月灵卡片",
+            str(start_dir / default_name),
+            "PNG 图片 (*.png)",
+        )
+        if not selected:
+            return False
+
+        target = Path(selected)
+        path_was_normalized = target.suffix.lower() != ".png"
+        if target.suffix.lower() != ".png":
+            # Append instead of replacing an unexpected suffix. Replacing
+            # `name.jpg` with `name.png` after the native dialog returns can
+            # silently target a different, existing file that the dialog never
+            # asked permission to overwrite.
+            target = Path(f"{target}.png")
+        dialog_parent = getattr(
+            self,
+            "_companion_journal_dialog",
+            self,
+        )
+        if path_was_normalized and target.exists():
+            answer = QMessageBox.question(
+                dialog_parent,
+                "文件已经存在",
+                f"最终 PNG 路径已经存在：\n{target}\n\n要覆盖它吗？",
+                (
+                    QMessageBox.StandardButton.Yes
+                    | QMessageBox.StandardButton.No
+                ),
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return False
+        temporary = target.with_name(
+            f".{target.name}.{os.getpid()}.moonshell.tmp"
+        )
+        try:
+            image = self._build_daily_card()
+            if not image.save(str(temporary), "PNG"):
+                raise OSError("Qt could not encode the PNG image")
+            os.replace(temporary, target)
+        except (OSError, RuntimeError) as exc:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+            logger.warning("Could not save daily MoonShell card: %s", exc)
+            QMessageBox.warning(
+                dialog_parent,
+                "卡片没有保存",
+                (
+                    f"无法写入所选位置：\n{target}\n\n"
+                    "请换一个位置，或检查目标文件夹权限。"
+                ),
+            )
+            return False
+
+        QMessageBox.information(
+            dialog_parent,
+            "今日卡片已保存",
+            f"已保存到：\n{target}",
+        )
+        return True
+
+    def _show_companion_journal(self) -> None:
+        phase = calculate_moon_phase()
+        existing = getattr(self, "_companion_journal_dialog", None)
+        if existing is not None:
+            self._companion_journal_heading.setText(
+                f"{phase.emoji} 陪伴手账 · {phase.name}"
+            )
+            self._companion_journal_details.setHtml(
+                self._companion_journal_html(phase)
+            )
+            self._fit_companion_journal_to_current_work_area(existing)
+            existing.show()
+            self._fit_companion_journal_to_current_work_area(existing)
+            existing.raise_()
+            existing.activateWindow()
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"陪伴手账 · {APP_NAME}")
+        dialog.setWindowIcon(self._app_icon)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
+        dialog.setAccessibleName("MoonShell 陪伴手账")
+        self._companion_journal_dialog = dialog
+
+        layout = QVBoxLayout(dialog)
+        heading = QLabel(f"{phase.emoji} 陪伴手账 · {phase.name}", dialog)
+        heading.setAccessibleName("当前月相与陪伴手账")
+        font = heading.font()
+        font.setPointSize(font.pointSize() + 3)
+        font.setBold(True)
+        heading.setFont(font)
+        layout.addWidget(heading)
+        self._companion_journal_heading = heading
+
+        details = QTextBrowser(dialog)
+        details.setMinimumSize(0, 0)
+        details.setAccessibleName(
+            "相识天数、月光、星晶与专注完成记录"
+        )
+        details.setHtml(self._companion_journal_html(phase))
+        layout.addWidget(details, 1)
+        self._companion_journal_details = details
+
+        save_card_button = QPushButton("保存今日卡片…", dialog)
+        save_card_button.setAccessibleName(
+            "保存今日卡片到本地 PNG 图片"
+        )
+        save_card_button.clicked.connect(self._save_daily_card)
+        layout.addWidget(save_card_button)
+        self._save_card_button = save_card_button
+
+        close_button = QPushButton("合上手账", dialog)
+        close_button.setDefault(True)
+        close_button.clicked.connect(dialog.close)
+        layout.addWidget(close_button)
+
+        self._fit_companion_journal_to_current_work_area(dialog)
+        dialog.show()
+        self._fit_companion_journal_to_current_work_area(dialog)
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _fit_companion_journal_to_current_work_area(
+        self,
+        dialog: QDialog | None = None,
+    ) -> None:
+        dialog = (
+            getattr(self, "_companion_journal_dialog", None)
+            if dialog is None
+            else dialog
+        )
+        if dialog is None:
+            return
+        available = self._window_screen_available()
+        if available.width() <= 0 or available.height() <= 0:
+            return
+
+        margin_x = min(16, max(0, (available.width() - 1) // 2))
+        margin_y = min(16, max(0, (available.height() - 1) // 2))
+        maximum_width = max(1, available.width() - margin_x * 2)
+        maximum_height = max(1, available.height() - margin_y * 2)
+        minimum_width = min(maximum_width, 260)
+        minimum_height = min(maximum_height, 260)
+        dialog.setMinimumSize(1, 1)
+        dialog.setMaximumSize(maximum_width, maximum_height)
+        dialog.setMinimumSize(minimum_width, minimum_height)
+        dialog.resize(
+            min(460, maximum_width),
+            min(520, maximum_height),
+        )
+        dialog.move(
+            available.left()
+            + max(0, (available.width() - dialog.width()) // 2),
+            available.top()
+            + max(0, (available.height() - dialog.height()) // 2),
+        )
+
+    def _show_about(self) -> None:
+        existing = getattr(self, "_about_dialog", None)
+        if existing is not None:
+            self._fit_about_dialog_to_current_work_area(existing)
+            existing.show()
+            self._fit_about_dialog_to_current_work_area(existing)
+            existing.raise_()
+            existing.activateWindow()
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"使用与隐私 · {APP_NAME}")
+        dialog.setWindowIcon(self._app_icon)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
+        self._about_dialog = dialog
+
+        layout = QVBoxLayout(dialog)
+        heading = QLabel(f"{APP_NAME}  {APP_VERSION}", dialog)
+        heading.setAccessibleName(f"{APP_NAME}，版本 {APP_VERSION}")
+        font = heading.font()
+        font.setPointSize(font.pointSize() + 3)
+        font.setBold(True)
+        heading.setFont(font)
+        layout.addWidget(heading)
+
+        summary = QLabel("一只在本地陪伴你的像素月灵", dialog)
+        summary.setAccessibleName("一只在本地陪伴你的像素月灵")
+        layout.addWidget(summary)
+
+        details = QTextBrowser(dialog)
+        details.setMinimumSize(0, 0)
+        details.setOpenExternalLinks(True)
+        details.setAccessibleName("MoonShell 使用方法、隐私说明与本地数据位置")
+        details.setHtml(
+            """
+            <h3>怎么和月灵相处</h3>
+            <ul>
+              <li>单击月灵可以摸摸它；按住拖动可以搬家，快速松手可以抛接。</li>
+              <li>右键月灵或托盘图标可调整活动强度、尺寸和感知开关。</li>
+              <li>单击托盘图标可随时唤回；Alt+F4 只在托盘可用时暂时隐藏。</li>
+              <li>键盘可按 Win+B 进入通知区域，用方向键选中 MoonShell，
+                  再按 Shift+F10（或菜单键）打开菜单。</li>
+              <li>“显示桌面月灵（重启后保持）”会记住显示偏好，但不包含开机自启。</li>
+              <li>“专注陪伴”会安静 25、50 或 90 分钟；临时隐藏仍会计时。
+                  退出期间不会提醒，截止前重新启动可继续；完成后会写进陪伴手账，
+                  要取消请选“结束专注”。</li>
+              <li>每天可领取一枚月光，没有断签惩罚；每七枚会凝成一颗星晶。</li>
+              <li>“陪伴手账”会显示相识天数、月光、星晶、专注记录与离线近似月相；
+                  不计算连续打卡，也不会因为没打开而惩罚你。手账还可以用现有角色与
+                  当天记录在本地生成一张“今日月灵卡片”。</li>
+            </ul>
+            <h3>隐私与感知</h3>
+            <ul>
+              <li><b>核心陪伴完全本地运行；除非你主动点击“项目主页与反馈”，
+                  MoonShell 不主动联网，也不上传数据。</b></li>
+              <li>设备感知默认开启，只读取 CPU、内存、电量和最后输入间隔等本机状态；
+                  若系统提供 NVIDIA 的 <code>nvidia-smi</code>，也会尽力读取 GPU
+                  与显存占用。光标靠近只触发即时表情。</li>
+              <li>“回应复制动作”默认关闭。开启后只判断剪贴板是否声明为文本类型，
+                  不读取、不记录剪贴板正文。</li>
+              <li>设备感知和复制回应都能在“感知与隐私”菜单关闭；隐藏时也会停止这两项。
+                  光标靠近只做即时判断且不记录。</li>
+            </ul>
+            <h3>本地数据</h3>
+            <p>设置、月光、陪伴手账、专注状态和诊断日志只保存在：</p>
+            <p><code>%s</code></p>
+            <p>“清除全部本地数据”会删除设置、陪伴记忆、月光和日志，然后退出。
+               下次启动会像第一次见面一样重新开始。</p>
+            <h3>许可</h3>
+            <p>MoonShell 以 MIT 许可证发布；随包依赖的许可见
+               <code>THIRD_PARTY_NOTICES.md</code>。</p>
+            """
+            % html.escape(str(DATA_DIR))
+        )
+        layout.addWidget(details, 1)
+
+        buttons = QGridLayout()
+        open_data = QPushButton("打开数据目录", dialog)
+        open_data.setAccessibleName("打开 MoonShell 本地数据目录")
+        open_data.clicked.connect(self._open_data_directory)
+        buttons.addWidget(open_data, 0, 0)
+
+        clear_data = QPushButton("清除全部本地数据…", dialog)
+        clear_data.setAccessibleName("清除 MoonShell 全部本地数据")
+        clear_data.clicked.connect(self._confirm_clear_local_data)
+        buttons.addWidget(clear_data, 0, 1)
+
+        project_page = QPushButton("项目主页与反馈", dialog)
+        project_page.setAccessibleName("打开 MoonShell 项目主页与问题反馈")
+        project_page.clicked.connect(self._open_project_page)
+        buttons.addWidget(project_page, 1, 0)
+
+        close_button = QPushButton("关闭", dialog)
+        close_button.clicked.connect(dialog.close)
+        close_button.setDefault(True)
+        buttons.addWidget(close_button, 1, 1)
+        layout.addLayout(buttons)
+        self._about_buttons = (
+            open_data,
+            clear_data,
+            project_page,
+            close_button,
+        )
+
+        self._fit_about_dialog_to_current_work_area(dialog)
+        dialog.show()
+        self._fit_about_dialog_to_current_work_area(dialog)
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _fit_about_dialog_to_current_work_area(
+        self,
+        dialog: QDialog | None = None,
+    ) -> None:
+        dialog = (
+            getattr(self, "_about_dialog", None)
+            if dialog is None
+            else dialog
+        )
+        if dialog is None:
+            return
+        available = self._window_screen_available()
+        if available.width() <= 0 or available.height() <= 0:
+            return
+
+        # Refit on every open, not only on construction. A user can close the
+        # dialog on a large monitor and reopen it from a compact high-DPI one.
+        margin_x = min(16, max(0, (available.width() - 1) // 2))
+        margin_y = min(16, max(0, (available.height() - 1) // 2))
+        maximum_width = max(1, available.width() - margin_x * 2)
+        maximum_height = max(1, available.height() - margin_y * 2)
+        target_width = min(620, maximum_width)
+        target_height = min(600, maximum_height)
+        minimum_width = min(
+            maximum_width,
+            max(240, min(420, maximum_width)),
+        )
+        minimum_height = min(
+            maximum_height,
+            max(240, min(340, maximum_height)),
+        )
+
+        # Temporarily clear the old minimum before lowering the maximum; Qt
+        # otherwise preserves the larger cross-monitor constraint.
+        dialog.setMinimumSize(1, 1)
+        dialog.setMaximumSize(maximum_width, maximum_height)
+        dialog.setMinimumSize(minimum_width, minimum_height)
+        dialog.resize(target_width, target_height)
+
+        buttons = getattr(self, "_about_buttons", ())
+        if len(buttons) == 4:
+            compact = maximum_width < 360
+            labels = (
+                ("打开目录", "清除数据…", "项目与反馈", "关闭")
+                if compact
+                else (
+                    "打开数据目录",
+                    "清除全部本地数据…",
+                    "项目主页与反馈",
+                    "关闭",
+                )
+            )
+            for button, label in zip(buttons, labels):
+                button.setText(label)
+
+        x = available.left() + max(
+            0,
+            (available.width() - dialog.width()) // 2,
+        )
+        y = available.top() + max(
+            0,
+            (available.height() - dialog.height()) // 2,
+        )
+        dialog.move(x, y)
+
+    def _open_data_directory(self) -> None:
+        try:
+            DATA_DIR.mkdir(parents=True, exist_ok=True)
+            opened = QDesktopServices.openUrl(QUrl.fromLocalFile(str(DATA_DIR)))
+        except OSError as exc:
+            opened = False
+            logger.warning("Could not open data directory %s: %s", DATA_DIR, exc)
+        if not opened:
+            QMessageBox.warning(
+                self,
+                "无法打开数据目录",
+                f"请在文件管理器中手动打开：\n{DATA_DIR}",
+            )
+
+    def _open_project_page(self) -> None:
+        if not QDesktopServices.openUrl(QUrl(PROJECT_URL)):
+            QMessageBox.warning(
+                self,
+                "无法打开项目主页",
+                f"请在浏览器中手动打开：\n{PROJECT_URL}",
+            )
+
+    def _confirm_clear_local_data(self) -> None:
+        answer = QMessageBox.warning(
+            self,
+            "清除全部本地数据",
+            "这会删除设置、陪伴记忆、月光、未完成的专注和诊断日志，"
+            "然后退出 MoonShell。\n\n此操作无法撤销，确定继续吗？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        self._discard_data_on_shutdown = True
+        self._shutdown()
+        close_logging()
+        failures = clear_known_local_data(include_legacy=True)
+        if failures:
+            paths = "\n".join(str(path) for path, _ in failures[:4])
+            QMessageBox.critical(
+                self,
+                "部分数据无法清除",
+                f"这些文件可能正被其他程序占用，请稍后手动删除：\n{paths}",
+            )
+        QApplication.quit()
+
+    def _show_today_gift(self) -> None:
+        self._focus_completed_pending = False
+        if not self._runtime_active:
+            self._recall_pet()
+
+        today_key = time.strftime("%Y-%m-%d")
+        gift = self._claim_daily_gift()
+        if gift is not None:
+            pose, line, seconds = gift
+            self._set_action(pose, seconds, force=True)
+            self.say(line, 3.8, force=True)
+            self._refresh_tray_status()
+            return
+
+        if self._gift_save_failed:
+            self._set_action("curious", 3.6, force=True)
+            self.say(
+                "这枚月光还没存好，暂时没有领取；请检查数据目录权限后重试。",
+                4.8,
+                force=True,
+            )
+            self._refresh_tray_status()
+            return
+
+        if self._gift_clock_guarded_day == today_key:
+            self._gift_clock_notice_shown = True
+            self._set_action("curious", 3.2, force=True)
+            self.say(
+                "检测到系统日期曾在未来；今天不重复发放，明天会恢复。",
+                4.2,
+                force=True,
+            )
+            self._refresh_tray_status()
+            return
+
+        if self._state.last_gift_date != today_key:
+            self._set_action("curious", 2.4, force=True)
+            self.say("系统日期早于上次记录，今天的月光先替你保留着。", 3.8, force=True)
+            return
+
+        milestone = self._state.moon_tokens > 0 and self._state.moon_tokens % 7 == 0
+        pose = "crystal" if milestone else "gift"
+        self._set_action(pose, 2.6, force=True)
+        if milestone:
+            line = (
+                f"第 {self._state.moon_tokens // 7} 颗星晶在这里。"
+                f"已经收集 {self._state.moon_tokens} 枚月光啦。"
+            )
+        else:
+            line = f"今天的月光在这里。已经有 {self._state.moon_tokens} 枚啦。"
+        self.say(line, 3.8, force=True)
 
     def _toggle_top(self, checked: bool) -> None:
         self.settings.always_on_top = checked
-        self.settings.save()
+        settings_saved = self._persist_settings(notify_failure=False)
+        was_active = self._runtime_active
         self.hide()
         self._configure_window()
-        if self.settings.enabled:
+        if was_active:
             self.show()
+        if not settings_saved:
+            self._notify_persistence_failure(
+                "置顶设置仅在本次运行中生效，未能保存到本地。"
+            )
 
     def _set_activity(self, level: str) -> None:
         self.settings.activity = level
-        self.settings.save()
+        settings_saved = self._persist_settings(notify_failure=False)
         self.act_lively.setChecked(level == "high")
         self.act_calm.setChecked(level == "low")
         if level == "low":
@@ -2111,9 +3944,44 @@ class SpritePetWindow(QWidget):
             self.say("好，我安静待着。", 1.8, force=True)
         else:
             self.say("嗯，我活动活动～", 1.6)
+        self._refresh_tray_status()
+        if not settings_saved:
+            self._notify_persistence_failure(
+                "活动强度仅在本次运行中生效，未能保存到本地。"
+            )
+
+    def _toggle_system_awareness(self, checked: bool) -> None:
+        self.settings.system_awareness = checked
+        settings_saved = self._persist_settings(notify_failure=False)
+        self.monitor.set_active(self._runtime_active and checked)
+        if not checked:
+            self._load = 0.0
+            self._cpu = self._mem = 0.0
+            self._gpu = self._gpu_memory = None
+            self._batt = self._plugged = None
+            if self._resource_busy:
+                self._leave_resource_state()
+            self._busy_samples = self._memory_samples = self._vram_samples = 0
+        self._refresh_tray_status()
+        if not settings_saved:
+            self._notify_persistence_failure(
+                "设备感知开关仅在本次运行中生效，未能保存到本地。"
+            )
+
+    def _toggle_clipboard_reactions(self, checked: bool) -> None:
+        self.settings.clipboard_reactions = checked
+        settings_saved = self._persist_settings(notify_failure=False)
+        if checked and self._runtime_active:
+            self._set_action("notify", 1.8, force=True)
+            self.say("只回应复制动作，不会读取或保存内容。", 3.6, force=True)
+        if not settings_saved:
+            self._notify_persistence_failure(
+                "复制回应开关仅在本次运行中生效，未能保存到本地。"
+            )
 
     def _set_size_mode(self, mode: str) -> None:
         self.settings.size_mode = mode
+        self._settings_dirty = True
         self.act_small.setChecked(mode != "standard")
         self.act_standard.setChecked(mode == "standard")
         self._apply_size(persist=True)
@@ -2122,24 +3990,136 @@ class SpritePetWindow(QWidget):
         self.debug_bounds = checked
         self.update()
 
+    def _refresh_tray_status(self) -> None:
+        if not hasattr(self, "status_action"):
+            return
+        self._probe_tray_available()
+        days = self._state.companionship_days()
+        tokens = self._state.moon_tokens
+        if not self.settings.enabled:
+            state_text = "已停用"
+        elif not self._runtime_active:
+            state_text = "暂时躲起来了"
+        elif self._focus_active:
+            minutes = max(1, int(math.ceil(self._focus_remaining_seconds() / 60.0)))
+            state_text = f"专注中 · 还剩 {minutes} 分钟"
+        elif self._focus_completed_pending:
+            state_text = "刚完成一段专注"
+        elif self._resource_busy:
+            state_text = "正在替你留意忙碌"
+        else:
+            state_text = self._mood_phrase()
+        if self._settings_save_failed or self._state_save_failed:
+            state_text = f"{state_text} · 数据未保存"
+        self.status_action.setText(f"状态 · {state_text}")
+        crystals = tokens // 7
+        until_crystal = 7 - (tokens % 7)
+        self.memory_action.setText(
+            f"相识第 {days} 天 · 月光 {tokens} 枚 · "
+            f"星晶 {crystals} 颗 · 下颗还差 {until_crystal} 枚"
+        )
+        phase = calculate_moon_phase()
+        self.act_companion_journal.setText(
+            f"陪伴手账 · {phase.emoji} {phase.name}…"
+        )
+        self.tray.setToolTip(
+            f"月壳游灵 · 相识第 {days} 天 · 月光 {tokens} 枚 · "
+            f"星晶 {crystals} 颗 · {phase.name} · {state_text}"
+        )
+        self.act_enabled.setChecked(self.settings.enabled)
+        self.act_enabled.setEnabled(self._tray_available)
+        self.act_visibility.setEnabled(self._tray_available)
+        if self._runtime_active:
+            self.act_visibility.setText("这次先隐藏月灵")
+        elif self.settings.enabled:
+            self.act_visibility.setText("显示月灵")
+        else:
+            self.act_visibility.setText("显示并启用月灵")
+        self.act_focus_end.setEnabled(self._focus_active)
+        if self._focus_active:
+            minutes = max(1, int(math.ceil(self._focus_remaining_seconds() / 60.0)))
+            self.act_focus_end.setText(f"结束专注 · 还剩 {minutes} 分钟")
+        else:
+            self.act_focus_end.setText("结束专注")
+        for action in (self.act_focus_25, self.act_focus_50, self.act_focus_90):
+            action.setEnabled(not self._focus_active)
+        today_key = time.strftime("%Y-%m-%d")
+        if self._gift_clock_guarded_day == today_key:
+            self.act_today_gift.setText("月光明天恢复")
+        elif self._state.last_gift_date == today_key:
+            self.act_today_gift.setText("重看今天的月光")
+        else:
+            self.act_today_gift.setText("领取今日月光")
+        self.act_today_gift.setEnabled(True)
+        self.act_system_awareness.setChecked(self.settings.system_awareness)
+        self.act_clipboard.setChecked(self.settings.clipboard_reactions)
+
     def _tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
-            self.act_enabled.setChecked(not self.settings.enabled)
-            self._toggle_enabled(not self.settings.enabled)
+            self._recall_pet()
+
+    def _on_tray_message_clicked(self) -> None:
+        if not self._focus_completed_pending:
+            self._recall_pet()
+            return
+        if not self._runtime_active:
+            self._recall_pet()
+            return
+
+        self._focus_completed_pending = False
+        self.raise_()
+        self.activateWindow()
+        self._set_action("star", 3.0, force=True)
+        self.say("这一段完成啦。起来活动一下吧。", 3.6, force=True)
+        self._refresh_tray_status()
 
     def activate_from_second_instance(self) -> None:
-        if not self.settings.enabled:
-            self.act_enabled.setChecked(True)
-            self._toggle_enabled(True)
-        else:
-            self.show()
-            self.raise_()
-        self._set_action("wave", 1.2, "我一直在这儿呀。")
+        self._recall_pet()
+
+    def closeEvent(self, event) -> None:  # type: ignore[override]
+        # Alt+F4 is a reversible session hide. It must not silently change the
+        # saved "enabled" preference or make the next launch stay invisible.
+        if not self._shutdown_done:
+            if not self._probe_tray_available():
+                self._shutdown()
+                event.accept()
+                QApplication.quit()
+                return
+            self._set_runtime_active(False)
+            event.ignore()
+            return
+        super().closeEvent(event)
+
+    def _shutdown(self) -> None:
+        """Idempotent cleanup for tray quit, app.quit(), logout, and test teardown."""
+        if self._shutdown_done:
+            return
+        self._shutdown_done = True
+        for timer in (
+            self.anim_timer,
+            self.phys_timer,
+            self.hover_timer,
+            self.state_timer,
+            self._display_timer,
+            self._teleport_timer,
+            self._mask_timer,
+            self._focus_timer,
+            self._focus_status_timer,
+            self._tray_watchdog,
+        ):
+            timer.stop()
+        try:
+            if not self._discard_data_on_shutdown:
+                self._save_position()
+                self._save_state()
+        finally:
+            try:
+                self.monitor.shutdown()
+            finally:
+                self.tray.hide()
 
     def _quit(self) -> None:
-        self._save_state()
-        self.monitor.shutdown()
-        self.tray.hide()
+        self._shutdown()
         QApplication.quit()
 
 
