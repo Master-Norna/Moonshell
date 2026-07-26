@@ -1248,6 +1248,24 @@ class ReleaseWorkflowTests(unittest.TestCase):
                     r"(?m)^\s+disable-pip:",
                 )
 
+    def test_release_summary_writes_are_not_split_redirections(self) -> None:
+        self.assertNotIn(">>", self.workflow)
+        self.assertGreaterEqual(
+            self.workflow.count(
+                "Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY "
+                "-Encoding utf8 -Value @("
+            ),
+            2,
+        )
+
+    def test_pe_validation_and_packaging_are_separate_steps(self) -> None:
+        self.assertIn("- name: Validate PE metadata", self.workflow)
+        self.assertIn("- name: Package Windows release", self.workflow)
+        self.assertNotIn(
+            "- name: Validate PE metadata and package",
+            self.workflow,
+        )
+
     def test_release_actions_are_pinned_to_commit_hashes(self) -> None:
         revisions = re.findall(
             r"^\s*uses:\s+[^@\s]+@([^\s]+)",

@@ -148,7 +148,7 @@ jobs:
       - name: Native packaged smoke test
         run: python tools/smoke_release.py
 
-      - name: Validate PE metadata and package
+      - name: Validate PE metadata
         shell: pwsh
         run: |
           $Executable = Resolve-Path dist\MoonShell\MoonShell.exe
@@ -169,25 +169,31 @@ jobs:
           if ($Info.FileVersion -notin @($Version, $NumericVersion)) {
             throw "FileVersion mismatch: $($Info.FileVersion)"
           }
+
+      - name: Package Windows release
+        shell: pwsh
+        run: |
           if (
             "${{ github.event_name }}" -eq "push" -and
             "${{ github.ref_type }}" -eq "tag"
           ) {
             python tools/package_release.py --unsigned-release
-            "### Unsigned maintenance release" >>
-              $env:GITHUB_STEP_SUMMARY
-            (
+            $ReleaseSummary = (
               "This public maintenance release is not " +
               "Authenticode-signed. SHA-256 verifies file consistency, " +
               "not publisher identity."
-            ) >> $env:GITHUB_STEP_SUMMARY
+            )
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Value @(
+              "### Unsigned maintenance release"
+              $ReleaseSummary
+            )
           } else {
             python tools/package_release.py --qa
-            "### Unsigned QA build" >> $env:GITHUB_STEP_SUMMARY
-            "This artifact is unsigned and is only for QA." >>
-              $env:GITHUB_STEP_SUMMARY
-            "Manual workflow runs never publish a GitHub Release." >>
-              $env:GITHUB_STEP_SUMMARY
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Value @(
+              "### Unsigned QA build"
+              "This artifact is unsigned and is only for QA."
+              "Manual workflow runs never publish a GitHub Release."
+            )
           }
 
       - name: Upload unsigned QA package
