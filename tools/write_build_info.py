@@ -62,14 +62,6 @@ def _sha256(path: Path) -> str:
 def write_build_info(output: Path) -> Path:
     output = output.resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
-    runtime_packages = {
-        name: importlib.metadata.version(name)
-        for name in RUNTIME_PACKAGE_NAMES
-    }
-    build_packages = {
-        name: importlib.metadata.version(name)
-        for name in BUILD_PACKAGE_NAMES
-    }
     locked_build_environment, lock_failures = parse_lock(
         ROOT / "requirements-build.txt"
     )
@@ -82,6 +74,14 @@ def write_build_info(output: Path) -> Path:
     )
     if environment_failures:
         raise ValueError("; ".join(environment_failures))
+    runtime_packages = {
+        name: importlib.metadata.version(name)
+        for name in RUNTIME_PACKAGE_NAMES
+    }
+    build_packages = {
+        name: importlib.metadata.version(name)
+        for name in BUILD_PACKAGE_NAMES
+    }
     provenance = collect_source_provenance(
         ROOT,
         f"v{APP_VERSION}",

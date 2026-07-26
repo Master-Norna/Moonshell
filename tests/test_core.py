@@ -998,9 +998,16 @@ class ReleaseContractTests(unittest.TestCase):
                 "tools.write_build_info.check_environment",
                 return_value=["locked package is not installed: pillow"],
             ),
+            patch(
+                "tools.write_build_info.importlib.metadata.version",
+                side_effect=AssertionError(
+                    "package versions must not be queried after validation fails"
+                ),
+            ) as version,
         ):
             with self.assertRaisesRegex(ValueError, "pillow"):
                 write_build_info(Path(temp) / "BUILD_INFO.json")
+        version.assert_not_called()
 
     def test_release_input_hash_set_must_be_complete_and_exact(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
