@@ -22,7 +22,8 @@ REQUIRED_SPRITES = (
     "hover",
 )
 
-OPTIONAL_SPRITES = (
+# Coherent expression set that is ready for the runtime and release build.
+OPTIONAL_BASE_SPRITES = (
     "wave",
     "shy",
     "pout",
@@ -33,31 +34,57 @@ OPTIONAL_SPRITES = (
     "sleep",
     "dizzy",
     "sit",
-    # "cool" magic batch from image3
-    "read",      # reading a book (cozy company while you work)
-    "magic",     # casting, sparkle ring
-    "flame",     # purple flame aura (fired up)
-    "twirl",     # joyful spin
-    "moon",      # riding the crescent moon (dreamy / night)
-    "star",      # holding up a glowing star (a little gift)
-    "dash",      # running with a motion trail (fast approach)
-    "poof",      # vanishing in a puff of smoke (collapse transition)
-    # second expression batch (image.png) -- same pixel pipeline
-    "wink",      # one eye closed + a little star (playful)
-    "look_side", # head turned to one side (glances toward your cursor)
-    "write",     # writing/studying (cozy company while you work)
-    "yawn",      # big sleepy yawn (drowsy beats)
-    "teleport",  # swirl of light (alt vanish transition)
-    "question",  # holding a little umbrella, puzzled (curious beat)
-    "hide",      # ducking down shyly (alt peek)
-    "gift",      # holding out a wrapped gift (a rare treat)
-    "crystal",   # cradling a glowing crystal (a little treasure)
-    # extra walk frames -> the walk auto-uses however many walk_{dir}_N exist
-    # (2/3/4-frame cycle).  Current art is a 4-frame side cycle.
+)
+
+FEATURE_SPRITES = (
+    "read",
+    "magic",
+    "star",
+)
+
+# The required set contains frames 1-2 in both directions. These complete the
+# coherent four-frame side walk used by the active release.
+EXTRA_WALK_SPRITES = (
     "walk_right_3",
     "walk_left_3",
     "walk_right_4",
     "walk_left_4",
 )
+
+OPTIONAL_SPRITES = (
+    *OPTIONAL_BASE_SPRITES,
+    *FEATURE_SPRITES,
+    *EXTRA_WALK_SPRITES,
+)
+
+# Runtime and release tooling must use this allowlist, never a directory glob.
+# Retired PNGs remain beside the active sources so they can be reworked without
+# silently returning to the product or influencing the shared palette.
+ACTIVE_SPRITES = (*REQUIRED_SPRITES, *OPTIONAL_SPRITES)
+
+# Paused until their silhouettes and motion language are rebuilt as coherent
+# multi-frame actions. Source and generated PNG files intentionally stay intact.
+RETIRED_PAUSED_SPRITES = (
+    "flame",
+    "twirl",
+    "moon",
+    "dash",
+    "poof",
+    "wink",
+    "look_side",
+    "yawn",
+    "teleport",
+    "question",
+    "hide",
+)
+
+# Useful concepts whose current props/readability need a fresh art pass.
+RETIRED_REDO_SPRITES = (
+    "write",
+    "gift",
+    "crystal",
+)
+
+RETIRED_SPRITES = (*RETIRED_PAUSED_SPRITES, *RETIRED_REDO_SPRITES)
 
 LAYOUT_Y_OFFSETS = (-16, -12, -6, -4, -2, 0, 4)

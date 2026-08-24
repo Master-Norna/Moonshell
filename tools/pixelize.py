@@ -1,13 +1,14 @@
 """Turn the smooth (painterly, downsampled) masters into limited-palette pixel art.
 
 assets/_masters/ holds the 96x96 smooth frames (hard edges + binary alpha, but
-shading is still smooth gradients).  This collapses that into a small
-SHARED palette built from the WHOLE set, so every pose reads as flat cel-shaded
-pixel art *and* the indigo/gold/purple/crystal-blue stay identical frame to frame
-(no per-frame colour drift / flicker), then writes the result to assets/moonshell/.
+shading is still smooth gradients).  This collapses the active product set into
+a small SHARED palette, so every published pose reads as flat cel-shaded pixel
+art *and* the indigo/gold/purple stay identical frame to frame (no per-frame
+colour drift / flicker), then writes those frames to assets/moonshell/.
 
 The masters are the durable source -- never edit assets/moonshell/ by hand; edit /
-add a master and re-run this so the whole set shares one palette.
+add a master and re-run this so the active set shares one palette. Retired source
+frames stay in place but do not influence the palette or get rebuilt.
 
 Default = preview only (writes a before/after contact sheet, touches nothing).
 Use --apply to (re)build the live set from the masters.
@@ -20,11 +21,16 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from pet.sprite_config import ACTIVE_SPRITES
+
 LIVE = ROOT / "assets" / "moonshell"
 MASTERS = ROOT / "assets" / "_masters"
 PREVIEW = ROOT / "docs" / "pixelize_preview.png"
@@ -33,7 +39,7 @@ ALPHA_T = 128
 
 
 def _frames() -> list[Path]:
-    return sorted(MASTERS.glob("*.png"))
+    return [MASTERS / f"{name}.png" for name in ACTIVE_SPRITES]
 
 
 def _build_palette(paths: list[Path], colors: int) -> Image.Image:
@@ -41,8 +47,13 @@ def _build_palette(paths: list[Path], colors: int) -> Image.Image:
     opaque: list[tuple[int, int, int]] = []
     for p in paths:
         im = Image.open(p).convert("RGBA")
+        pixels = (
+            im.get_flattened_data()
+            if hasattr(im, "get_flattened_data")
+            else im.getdata()
+        )
         opaque.extend(
-            (r, g, b) for (r, g, b, a) in im.getdata() if a >= ALPHA_T
+            (r, g, b) for (r, g, b, a) in pixels if a >= ALPHA_T
         )
     strip = Image.new("RGB", (len(opaque), 1))
     strip.putdata(opaque)
@@ -78,13 +89,14 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--colors", type=int, default=24, help="palette size (fewer = chunkier)")
     ap.add_argument("--apply", action="store_true", help="convert assets/moonshell in place")
-    ap.add_argument("--sample", default="idle,star,flame,crystal,look_side,wink",
+    ap.add_argument("--sample", default="idle,happy,read,magic,star,walk_right_4",
                     help="frames to show in the preview")
     args = ap.parse_args()
 
     paths = _frames()
-    if not paths:
-        print("no sprites found")
+    missing = [path.name for path in paths if not path.is_file()]
+    if missing:
+        print("missing active sprite masters: " + ", ".join(missing))
         return 1
     pal = _build_palette(paths, args.colors)
     print(f"built shared {args.colors}-colour palette from {len(paths)} frames")
@@ -97,8 +109,13 @@ def main() -> int:
         return 0
 
     # preview: before(master) / after for a few representative frames, app size + zoomed
+    active_names = set(ACTIVE_SPRITES)
     wanted = [s.strip() for s in args.sample.split(",")]
-    names = [n for n in wanted if (MASTERS / f"{n}.png").exists()] or [p.stem for p in paths[:6]]
+    names = [
+        name
+        for name in wanted
+        if name in active_names and (MASTERS / f"{name}.png").is_file()
+    ] or [p.stem for p in paths[:6]]
     from PIL import ImageDraw
     rows = []
     for n in names:

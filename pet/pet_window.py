@@ -60,6 +60,7 @@ from PySide6.QtWidgets import (
 )
 
 from .logging_setup import close_logging
+from .moon_corner import MoonCornerSnapshot, MoonCornerWidget, MoonRenderer
 from .moon_phase import MoonPhase, calculate_moon_phase
 from .paths import DATA_DIR, clear_known_local_data
 from .monitor import SystemMonitor, Telemetry, machine_load
@@ -85,6 +86,15 @@ class Action:
     name: str = "idle"
     until: float = 0.0
     locked: bool = False
+
+
+@dataclass(frozen=True)
+class ActionBeat:
+    """One readable pose in a short causal reaction sequence."""
+
+    name: str
+    seconds: float
+    message: Optional[str] = None
 
 
 @dataclass
@@ -200,7 +210,9 @@ class SpritePetWindow(QWidget):
         "groom": "blink",
         "hover": "hover",
         "bounce": "happy",
-        # expanded expressive actions
+        # Product-facing poses.  Logical action names below may outlive an art
+        # batch; map them onto the small canonical set instead of loading a
+        # visually unrelated frame just because the file still exists.
         "wave": "wave",
         "shy": "shy",
         "pout": "pout",
@@ -212,23 +224,26 @@ class SpritePetWindow(QWidget):
         "sit": "sit",
         "read": "read",
         "magic": "magic",
-        "flame": "flame",
-        "twirl": "twirl",
-        "moon": "moon",
+        "flame": "notify",
+        "twirl": "excited",
+        "moon": "sleep",
         "star": "star",
-        "dash": "dash",
-        "poof": "poof",
-        # second expression batch
-        "wink": "wink",
-        "look_side": "look_side",
-        "look_side_flip": "look_side_flip",
-        "write": "write",
-        "yawn": "yawn",
-        "teleport": "teleport",
-        "question": "question",
-        "hide": "hide",
-        "gift": "gift",
-        "crystal": "crystal",
+        "dash": "walk_left_1",
+        "dash_flip": "walk_right_1",
+        "poof": "magic",
+        # Retired visual batches keep their logical behavior but resolve to a
+        # coherent canonical pose.  This avoids breaking memories/tests while
+        # preventing those old PNGs from entering the runtime language.
+        "wink": "happy",
+        "look_side": "curious",
+        "look_side_flip": "curious",
+        "write": "read",
+        "yawn": "sleepy",
+        "teleport": "magic",
+        "question": "curious",
+        "hide": "peek",
+        "gift": "star",
+        "crystal": "star",
         "walk_right_4": "walk_right_4",
         "walk_left_4": "walk_left_4",
         "walk_right_1": "walk_right_1",
@@ -275,6 +290,8 @@ class SpritePetWindow(QWidget):
 
         self.frame = 0
         self.action = Action("idle", 0, False)
+        self._action_queue: list[ActionBeat] = []
+        self._action_sequence_force = False
         self.message = ""
         self.message_until = 0.0
         self.last_idle_action = time.monotonic()
@@ -296,6 +313,7 @@ class SpritePetWindow(QWidget):
         self.walk_target_x: Optional[int] = None
         self._walk_dist = 0.0          # ground covered this stroll, drives the gait
         self._walk_pos_f = 0.0         # float x so the step-pulse can sub-pixel glide
+        self._last_walk_t = time.monotonic()
         self._dashing = False          # this stroll is an eager run (uses dash art)
         self._was_parked = False       # tracks parking so we only react on entering
         self._action_start = 0.0       # when the current beat began (entry "settle")
@@ -451,6 +469,15 @@ class SpritePetWindow(QWidget):
         if self._runtime_active:
             self.anim_timer.start()
 
+        # Position and gait are separate concerns: the 140 ms character-frame
+        # clock remains deliberately calm, while movement itself advances at a
+        # precise 16 ms cadence using elapsed time.  This removes the visible
+        # seven-jumps-per-second glide without speeding up the sprite animation.
+        self.walk_timer = QTimer(self)
+        self.walk_timer.setInterval(16)
+        self.walk_timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self.walk_timer.timeout.connect(self._on_walk_motion)
+
         # Smooth 60fps loop, only running while the pet is airborne.
         self.phys_timer = QTimer(self)
         self.phys_timer.setInterval(16)
@@ -465,6 +492,10 @@ class SpritePetWindow(QWidget):
         self._teleport_timer.setSingleShot(True)
         self._teleport_timer.setInterval(520)
         self._teleport_timer.timeout.connect(self._finish_teleport)
+
+        self._action_sequence_timer = QTimer(self)
+        self._action_sequence_timer.setSingleShot(True)
+        self._action_sequence_timer.timeout.connect(self._advance_action_sequence)
 
         self._mask_timer = QTimer(self)
         self._mask_timer.setSingleShot(True)
@@ -509,6 +540,16 @@ class SpritePetWindow(QWidget):
         )
         self.monitor.telemetry.connect(self._on_telemetry)
 
+        # The corner moon is a read-only projection of existing companion
+        # memory.  It never owns or mutates PetState, so pet, journal, and moon
+        # cannot drift into three competing sources of truth.
+        self._moon_corner = MoonCornerWidget(parent=self, interactive=False)
+        self._moon_corner.set_always_on_top(self.settings.always_on_top)
+        self._moon_focus_timer = QTimer(self)
+        self._moon_focus_timer.setInterval(1000)
+        self._moon_focus_timer.timeout.connect(self._sync_moon_corner)
+        self.state_timer.timeout.connect(self._sync_moon_corner)
+
         clip = QApplication.clipboard()
         if clip is not None:
             clip.dataChanged.connect(self._on_clipboard)
@@ -522,6 +563,7 @@ class SpritePetWindow(QWidget):
         self._arm_focus_timers()
 
         self._snap_to_taskbar(initial=True)
+        self._sync_moon_corner()
         if self._runtime_active:
             self.show()
         else:
@@ -1075,6 +1117,7 @@ class SpritePetWindow(QWidget):
         )
         screen = self._window_screen()
         new_screen_name = screen.name() if screen is not None else None
+        screen_changed = self.settings.screen_name != new_screen_name
         changed = (
             self.settings.x != new_x
             or self.settings.x_ratio != new_ratio
@@ -1083,6 +1126,12 @@ class SpritePetWindow(QWidget):
         self.settings.x = new_x
         self.settings.x_ratio = new_ratio
         self.settings.screen_name = new_screen_name
+        if screen_changed and hasattr(self, "_moon_corner") and screen is not None:
+            self._moon_corner.anchor_to_screen(
+                screen,
+                corner="top_right",
+                margin=(18, 18),
+            )
         if changed:
             self._settings_dirty = True
         if persist and self._settings_dirty:
@@ -1163,6 +1212,10 @@ class SpritePetWindow(QWidget):
 
     def _revalidate_position(self) -> None:
         """Keep the pet on a real screen after a resolution / monitor / DPI change."""
+        moon = getattr(self, "_moon_corner", None)
+        screen = self._window_screen()
+        if moon is not None and screen is not None:
+            moon.anchor_to_screen(screen, corner="top_right", margin=(18, 18))
         if self.held or self.dragging or self.falling or not self.isVisible():
             return
         self._stage_cache.clear()
@@ -1563,6 +1616,50 @@ class SpritePetWindow(QWidget):
     def _focus_remaining_seconds(self) -> float:
         return max(0.0, self._focus_deadline - time.monotonic())
 
+    def _focus_visual_progress(self) -> float:
+        """Return a stable 0..1 projection for the moon's quiet focus ring."""
+        if not self._focus_active:
+            return 0.0
+        planned_seconds = max(1, self._state.focus_planned_minutes) * 60.0
+        return min(
+            1.0,
+            max(0.0, 1.0 - self._focus_remaining_seconds() / planned_seconds),
+        )
+
+    def _moon_snapshot(self, phase: MoonPhase | None = None) -> MoonCornerSnapshot:
+        """Build the moon strictly from existing, durable companion memory."""
+        resolved_phase = calculate_moon_phase() if phase is None else phase
+        return MoonCornerSnapshot.from_phase(
+            resolved_phase,
+            moon_tokens=self._state.moon_tokens,
+            focus_minutes_completed=self._state.focus_minutes_completed,
+            focus_active=self._focus_active,
+            focus_progress=self._focus_visual_progress(),
+        )
+
+    def _sync_moon_corner(self, *, pulse: str | None = None) -> None:
+        """Refresh, re-anchor, and lifecycle-gate the shared corner moon."""
+        moon = getattr(self, "_moon_corner", None)
+        if moon is None or self._shutdown_done:
+            return
+        moon.set_snapshot(self._moon_snapshot())
+        screen = self._window_screen()
+        if screen is not None:
+            moon.anchor_to_screen(screen, corner="top_right", margin=(18, 18))
+        moon.set_always_on_top(self.settings.always_on_top)
+        if self._runtime_active:
+            moon.show()
+            if pulse:
+                moon.pulse(pulse)
+            if self._focus_active:
+                if not self._moon_focus_timer.isActive():
+                    self._moon_focus_timer.start()
+            else:
+                self._moon_focus_timer.stop()
+        else:
+            self._moon_focus_timer.stop()
+            moon.hide()
+
     @property
     def _lively(self) -> bool:
         """High activity: strolls, talks, livelier beats."""
@@ -1610,6 +1707,7 @@ class SpritePetWindow(QWidget):
         self._state.focus_planned_minutes = minutes
         self.walking = False
         self.walk_target_x = None
+        self.walk_timer.stop()
         self._teleport_target = None
         self._teleport_timer.stop()
         if self._resource_busy:
@@ -1617,6 +1715,7 @@ class SpritePetWindow(QWidget):
         self._busy_samples = self._memory_samples = self._vram_samples = 0
         self._arm_focus_timers()
         state_saved = self._save_state(notify_failure=False)
+        self._sync_moon_corner(pulse="focus")
 
         pose = "read" if "read" in self.sprite_images else "sit"
         self._set_action(pose, 3.0, force=True)
@@ -1634,6 +1733,12 @@ class SpritePetWindow(QWidget):
     def _finish_focus(self, *, completed: bool) -> None:
         was_focusing = self._focus_deadline > 0.0 or self._state.focus_until > 0.0
         planned_minutes = self._state.focus_planned_minutes
+        completion_before = (
+            self._state.focus_sessions_completed,
+            self._state.focus_minutes_completed,
+            self._state.focus_today_date,
+            self._state.focus_today_minutes,
+        )
         if completed and was_focusing:
             if planned_minutes <= 0:
                 planned_minutes = max(
@@ -1658,17 +1763,32 @@ class SpritePetWindow(QWidget):
             return
 
         state_saved = self._save_state(notify_failure=False)
+        if completed and not state_saved:
+            (
+                self._state.focus_sessions_completed,
+                self._state.focus_minutes_completed,
+                self._state.focus_today_date,
+                self._state.focus_today_minutes,
+            ) = completion_before
+        self._sync_moon_corner(
+            pulse="focus_complete" if completed and state_saved else None,
+        )
         if completed:
             self._focus_completed_pending = True
             if self._runtime_active:
                 pose = "star" if "star" in self.sprite_images else "happy"
-                self._set_action(pose, 3.2, force=True)
                 line = (
                     f"这一段完成啦，手账记下了 {planned_minutes} 分钟。"
                     if state_saved
                     else "这一段完成啦；但陪伴记录暂时无法保存。"
                 )
-                self.say(line, 4.2 if not state_saved else 3.6, force=True)
+                self._play_action_sequence(
+                    (
+                        ActionBeat(pose, 2.55, line),
+                        ActionBeat("happy", 0.65),
+                    ),
+                    force=True,
+                )
             try:
                 if self._probe_tray_available():
                     self.tray.showMessage(
@@ -1719,6 +1839,8 @@ class SpritePetWindow(QWidget):
         seconds: float = 2.2,
         message: Optional[str] = None,
         force: bool = False,
+        *,
+        _from_sequence: bool = False,
     ) -> None:
         now = time.monotonic()
         if (
@@ -1728,14 +1850,48 @@ class SpritePetWindow(QWidget):
             and action not in {"idle", "edge"}
         ):
             return
+        if not _from_sequence and hasattr(self, "_action_sequence_timer"):
+            self._action_sequence_timer.stop()
+            self._action_queue.clear()
         # Stop strolling so the pet turns to face whatever just happened.
         self.walking = False
         self.walk_target_x = None
+        if hasattr(self, "walk_timer"):
+            self.walk_timer.stop()
         self._action_start = now
         self.action = Action(action, now + seconds, locked=seconds >= 2.0)
         if message:
             self.say(message, duration=max(2.0, min(3.8, seconds + 0.4)))
         self.update()
+
+    def _play_action_sequence(
+        self,
+        beats: tuple[ActionBeat, ...],
+        *,
+        force: bool = False,
+    ) -> None:
+        """Play a tiny, interruptible sequence; the host still owns all state."""
+        self._action_sequence_timer.stop()
+        self._action_queue = [beat for beat in beats if beat.seconds > 0.0]
+        self._action_sequence_force = force
+        self._advance_action_sequence()
+
+    def _advance_action_sequence(self) -> None:
+        if not self._action_queue:
+            self._action_sequence_timer.stop()
+            return
+        beat = self._action_queue.pop(0)
+        self._set_action(
+            beat.name,
+            beat.seconds,
+            beat.message,
+            force=self._action_sequence_force,
+            _from_sequence=True,
+        )
+        if self._action_queue:
+            self._action_sequence_timer.start(
+                max(1, int(round(beat.seconds * 1000.0)))
+            )
 
     # ---------- the brain: sensing -> mood -> behavior ----------
     def _on_telemetry(self, t: Telemetry) -> None:
@@ -2220,7 +2376,8 @@ class SpritePetWindow(QWidget):
             return
 
         if self.walking:
-            self._step_walk()
+            # Gait frames still follow distance, but motion is owned by the
+            # dedicated 16 ms elapsed-time loop below.
             self._update_if_dirty()
             return
 
@@ -2245,7 +2402,8 @@ class SpritePetWindow(QWidget):
             self._last_glance = now
             self.last_idle_action = now  # don't immediately stack another beat
             self.mood.attention = min(1.0, self.mood.attention + 0.2)
-            if (self._cursor_speed > 900 and "hide" in self.sprite_images
+            if (self._cursor_speed > 900
+                    and self.SPRITE_MAP["hide"] in self.sprite_images
                     and self.mood.sleepiness < 0.85 and random.random() < 0.7):
                 # the cursor rushed straight at it -> a startled duck-down; it
                 # peeks back out on its own once the beat passes
@@ -2256,7 +2414,7 @@ class SpritePetWindow(QWidget):
                 # too sleepy to perk up -- just a drowsy half-peek, stays settled.
                 self._set_action("peek" if "peek" in self.sprite_images else "sleepy", 1.0)
             elif (abs(cp.x() - center.x()) > abs(cp.y() - center.y())
-                  and "look_side" in self.sprite_images):
+                  and self.SPRITE_MAP["look_side"] in self.sprite_images):
                 # cursor coming in from a side -> turn the head and watch it
                 self.mood.curiosity = min(1.0, self.mood.curiosity + 0.2)
                 self._set_action(self._side_glance_pose(cp.x(), center.x()), seconds=1.2)
@@ -2337,7 +2495,6 @@ class SpritePetWindow(QWidget):
                 (name, weight)
                 for name, weight in (
                     ("read", 3.0),
-                    ("write", 1.4),
                     ("sit", 1.8),
                     ("blink", 0.7),
                 )
@@ -2355,14 +2512,14 @@ class SpritePetWindow(QWidget):
             return
 
         # ----- coherence gate: a sleepy pet shouldn't pop up to walk and grin -----
-        # Deep in sleep it only stirs softly; it won't stroll or play until
-        # something (you, the morning) actually wakes it back up.  At night it may
-        # drift up to ride the crescent moon for a beat before settling again.
+        # Deep in sleep it only stirs softly; the persistent corner moon now
+        # carries the night language, so the character does not become a second,
+        # unrelated crescent-moon illustration at random.
         if m.sleepiness >= 0.78:
             if night:
-                # night: it can fully bed down (lie-down sleep) and ride the moon
+                # At night it can fully bed down in the canonical sleep pose.
                 sleep_pool: list[tuple[str, float]] = [
-                    ("sleep", 3.0), ("sleepy", 2.0), ("blink", 0.5), ("moon", 0.7),
+                    ("sleep", 3.0), ("sleepy", 2.0), ("blink", 0.5),
                 ]
             else:
                 # daytime: just dozes upright -- no full night-sleep, no moon
@@ -2413,22 +2570,6 @@ class SpritePetWindow(QWidget):
             ("shy", (0.12 + 0.5 * m.mood) * wake),
             ("pout", 0.04 + 0.6 * (1.0 - m.mood)),
             ("sad", 0.02 + 0.5 * (1.0 - m.mood) * (1.0 - m.energy)),
-            # a playful wink when it's in good spirits and you're around
-            ("wink", (0.10 + 0.6 * m.mood * m.attention) * wake),
-            # a big yawn as it gets drowsy (but before it actually nods off)
-            ("yawn", (0.1 + 1.4 * m.sleepiness) * (1.0 if m.sleepiness < 0.78 else 0.0)),
-            # a puzzled little beat when curious but nothing's going on
-            ("question", (0.05 + 0.5 * m.curiosity) * wake * (1.0 if self._idle_sec > 6 else 0.3)),
-            # ----- the "cool" batch, tied to context so it never feels random -----
-            # reads/writes alongside you when the machine (you) is busy and you're
-            # here; little spells / spins / treasures when it's in a great mood.
-            ("read", (0.1 + 1.4 * self._load) * wake * (1.0 if self._idle_sec < 8 else 0.25)),
-            ("write", (0.08 + 1.2 * self._load) * wake * (1.0 if self._idle_sec < 8 else 0.25)),
-            ("magic", (0.05 + 0.9 * m.mood * m.energy) * wake),
-            ("twirl", (0.04 + 0.8 * m.mood * m.energy) * wake),
-            ("star", (0.04 + 0.7 * m.mood * m.energy) * wake),
-            # riding the crescent moon is a night-only beat -- never in daylight
-            ("moon", (0.5 * (0.4 + 0.8 * m.sleepiness)) if night else 0.0),
             # tucked against a screen edge -> occasionally peeks over the side
             ("peek", 1.2 if self._at_screen_edge() else 0.0),
         ]
@@ -2444,11 +2585,8 @@ class SpritePetWindow(QWidget):
 
         if kind == "blink":
             secs = 0.24
-        elif kind in ("sleep", "sleepy", "yawn"):
+        elif kind in ("sleep", "sleepy"):
             secs = random.uniform(2.2, 3.6)
-        elif kind in ("read", "write", "magic", "twirl", "moon", "flame",
-                      "star"):
-            secs = random.uniform(2.2, 3.4)  # special beats linger to be enjoyed
         else:
             secs = random.uniform(1.1, 2.2)
         # Quieter when sleepy/low, a touch chattier when up; still mostly silent.
@@ -2484,6 +2622,8 @@ class SpritePetWindow(QWidget):
             and random.random() < 0.35
         )
         self.walking = True
+        self._last_walk_t = time.monotonic()
+        self.walk_timer.start()
         return True
 
     def _start_teleport(self) -> bool:
@@ -2492,7 +2632,7 @@ class SpritePetWindow(QWidget):
         A moon spirit doesn't always bother with feet: it vanishes here, and a
         beat later reappears over there.  Rare, and only for hops long enough
         that walking would be a trek."""
-        if "teleport" not in self.sprite_images:
+        if self.SPRITE_MAP["teleport"] not in self.sprite_images:
             return False
         min_x, max_x = self._wander_x_bounds()
         if max_x <= min_x:
@@ -2534,6 +2674,8 @@ class SpritePetWindow(QWidget):
         self._walk_pos_f = float(self.x())
         self._dashing = False
         self.walking = True
+        self._last_walk_t = time.monotonic()
+        self.walk_timer.start()
         return True
 
     def _wander_x_bounds(self) -> tuple[int, int]:
@@ -2541,7 +2683,15 @@ class SpritePetWindow(QWidget):
         min_x, max_x = self._x_bounds()
         return min_x + self.PARK_ZONE + 1, max_x - self.PARK_ZONE - 1
 
-    def _step_walk(self) -> None:
+    def _on_walk_motion(self) -> None:
+        """Advance a stroll from real elapsed time, independent of sprite FPS."""
+        now = time.monotonic()
+        dt = max(0.008, min(0.050, now - self._last_walk_t))
+        self._last_walk_t = now
+        self._step_walk(dt)
+        self._update_if_dirty()
+
+    def _step_walk(self, dt: float = 0.140) -> None:
         if self.walk_target_x is None or self.dragging or self.collapsed or not self.isVisible():
             self._end_walk()
             return
@@ -2551,7 +2701,9 @@ class SpritePetWindow(QWidget):
         # step-pulse: the glide speeds up as a leg swings through and eases at each
         # footfall, so the body lurches per step instead of sliding at one speed.
         factor = 1.0 + self.WALK_PULSE * math.cos(2 * math.pi * 2 * self._gait_phase())
-        speed = base * factor
+        # ``base`` was historically pixels per 140 ms animation tick. Preserve
+        # its apparent pace while making travel smooth and refresh-rate safe.
+        speed = base * factor * max(0.0, min(0.140, dt)) / 0.140
         remaining = self.walk_target_x - self._walk_pos_f
         if abs(remaining) <= speed:
             self._walk_dist += abs(remaining)
@@ -2565,6 +2717,7 @@ class SpritePetWindow(QWidget):
         self.move(int(round(self._walk_pos_f)), self.y())
 
     def _end_walk(self) -> None:
+        self.walk_timer.stop()
         self.walking = False
         self._dashing = False
         self.walk_target_x = None
@@ -2659,13 +2812,13 @@ class SpritePetWindow(QWidget):
         self._state.moon_tokens = min(1_000_000, self._state.moon_tokens + 1)
         if self._state.moon_tokens % 7 == 0:
             crystal_number = self._state.moon_tokens // 7
-            pose = "crystal" if "crystal" in self.sprite_images else "star"
+            pose = "crystal"
             line = (
                 f"第 {crystal_number} 颗星晶凝成啦！"
                 f"月光已经有 {self._state.moon_tokens} 枚。"
             )
         else:
-            pose = "gift" if "gift" in self.sprite_images else "happy"
+            pose = "gift"
             line = random.choice(("给你留了一枚月光。", "喏，今天的月光。"))
         return pose, line, 2.4
 
@@ -2682,6 +2835,7 @@ class SpritePetWindow(QWidget):
         if gift is None:
             return None
         if self._save_state(notify_failure=False):
+            self._sync_moon_corner(pulse="gift")
             return gift
 
         (
@@ -2723,24 +2877,39 @@ class SpritePetWindow(QWidget):
             pose = "curious"
             line = "检测到系统日期曾在未来；今天不重复发放，明天会恢复。"
             secs = 3.2
-        elif self._pet_count >= 6 and "twirl" in self.sprite_images:
-            line, pose = random.choice(("嘿嘿，转个圈！", "你最好啦～")), "twirl"
-            secs = 2.2  # let the happy spin play out
         elif self._pet_count >= 4:
             line, pose = random.choice(self.PET_LINES_LOTS), "love"
         elif self._pet_count >= 2:
             line, pose = random.choice(self.PET_LINES_MID), "shy"
         else:
-            # first pat: usually a soft smile, sometimes a playful wink
-            pose = "wink" if ("wink" in self.sprite_images and random.random() < 0.4) else "happy"
+            pose = "happy"
             line = random.choice(self.PET_LINES_SOFT)
         # Attention from you lifts its spirits and wakes it a little.
         self.mood.mood = min(1.0, self.mood.mood + 0.18)
         self.mood.energy = min(1.0, self.mood.energy + 0.06)
         self.mood.attention = min(1.0, self.mood.attention + 0.25)
         self.mood.sleepiness = max(0.0, self.mood.sleepiness - 0.10)
-        # A direct touch from you always lands, even mid-spell or mid-nap.
-        self._set_action(pose, seconds=secs, message=line, force=True)
+        # A direct touch always lands. Ordinary pats get a short anticipation
+        # beat so the response reads as cause -> reaction instead of a hard
+        # sprite swap. The daily result appears immediately, then settles.
+        if gift_awarded:
+            self._play_action_sequence(
+                (
+                    ActionBeat(pose, secs, line),
+                    ActionBeat("happy", 0.65),
+                ),
+                force=True,
+            )
+        elif pose == "curious" and secs >= 3.0:
+            self._set_action(pose, seconds=secs, message=line, force=True)
+        else:
+            self._play_action_sequence(
+                (
+                    ActionBeat("curious", 0.28),
+                    ActionBeat(pose, secs, line),
+                ),
+                force=True,
+            )
         if gift_awarded:
             # The claim was saved before it was presented, preventing both a
             # restart duplicate and a false success on a read-only data path.
@@ -2802,6 +2971,9 @@ class SpritePetWindow(QWidget):
             return
         self.walking = False
         self.walk_target_x = None
+        self.walk_timer.stop()
+        self._action_sequence_timer.stop()
+        self._action_queue.clear()
         if event.button() == Qt.MouseButton.LeftButton:
             # Direct interaction cancels a pending delayed teleport. Otherwise a
             # quick tap could finish before the callback and still blink the pet
@@ -3028,6 +3200,7 @@ class SpritePetWindow(QWidget):
             if snap:
                 self._snap_to_taskbar(initial=False)
             self.show()
+            self._sync_moon_corner()
         else:
             self._tray_missing_checks = 0
             if not self._tray_watchdog.isActive():
@@ -3036,16 +3209,20 @@ class SpritePetWindow(QWidget):
             self.state_timer.stop()
             self.hover_timer.stop()
             self.phys_timer.stop()
+            self.walk_timer.stop()
             self._focus_status_timer.stop()
             self.walking = False
             self.walk_target_x = None
             self._teleport_target = None
             self._teleport_timer.stop()
+            self._action_sequence_timer.stop()
+            self._action_queue.clear()
             self.falling = False
             self.dragging = False
             self.held = False
             self._drag_history.clear()
             self.hide()
+            self._sync_moon_corner()
         self._refresh_tray_status()
 
     def _toggle_enabled(self, checked: bool) -> None:
@@ -3095,6 +3272,7 @@ class SpritePetWindow(QWidget):
         self.falling = False
         self.walking = False
         self.walk_target_x = None
+        self.walk_timer.stop()
         self._drag_history.clear()
         self._teleport_target = None
         self.phys_timer.stop()
@@ -3111,6 +3289,8 @@ class SpritePetWindow(QWidget):
         self._set_runtime_active(True)
         self._save_position()
         self.raise_()
+        if completed_focus:
+            self._sync_moon_corner(pulse="focus_complete")
         if completed_focus:
             pose, line = "star", "刚才那一段专注完成啦。"
         elif self._focus_active:
@@ -3177,17 +3357,19 @@ class SpritePetWindow(QWidget):
         today_minutes = self._state.focus_today_minutes
         sessions = self._state.focus_sessions_completed
         total_minutes = self._state.focus_minutes_completed
+        growth_level, growth_progress = self._moon_snapshot(phase).resolved_growth
         focus_today = f"今日专注 <b>{today_minutes}</b> 分钟。"
         return (
             """
             <style>
-              body { line-height: 1.45; }
+              body { line-height: 1.45; color: #f4eaff; }
               h2 { margin: 2px 0 4px 0; }
               h3 { margin: 14px 0 4px 0; }
               p { margin: 4px 0; }
-              .muted { color: #707789; }
+              .muted { color: #989fca; }
               .memory {
-                background: #f4f1ff;
+                background: #1d2148;
+                border: 1px solid #403d73;
                 border-radius: 8px;
                 padding: 8px;
               }
@@ -3199,6 +3381,7 @@ class SpritePetWindow(QWidget):
               <p>相识第 <b>%d</b> 天</p>
               <p>月光 <b>%d</b> 枚 · 星晶 <b>%d</b> 颗 ·
                  下一颗还差 <b>%d</b> 枚月光</p>
+              <p>角落月亮 · 成长第 <b>%d</b> 层 · 本层 <b>%d%%</b></p>
             </div>
             <h3>一起专注过的时间</h3>
             <p>%s</p>
@@ -3222,6 +3405,8 @@ class SpritePetWindow(QWidget):
                 tokens,
                 crystals,
                 until_crystal,
+                growth_level + 1,
+                round(growth_progress * 100),
                 focus_today,
                 sessions,
                 total_minutes,
@@ -3257,78 +3442,14 @@ class SpritePetWindow(QWidget):
         painter: QPainter,
         rect: QRect,
         phase: MoonPhase,
+        snapshot: MoonCornerSnapshot | None = None,
     ) -> None:
-        """Draw an eight-phase glyph without depending on an emoji font."""
-        light = QColor("#ffd86f")
-        shadow = QColor("#161936")
-        halo = QColor(255, 216, 111, 35)
-        painter.save()
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(halo)
-        painter.drawEllipse(rect.adjusted(-10, -10, 10, 10))
-
-        disc = QPainterPath()
-        disc.addEllipse(
-            float(rect.x()),
-            float(rect.y()),
-            float(rect.width()),
-            float(rect.height()),
+        """Reuse the same moon renderer as the desktop companion."""
+        MoonRenderer.paint(
+            painter,
+            rect,
+            snapshot or MoonCornerSnapshot.from_phase(phase),
         )
-        painter.setClipPath(disc)
-        painter.fillPath(disc, QBrush(light))
-        painter.setBrush(shadow)
-        index = phase.index
-        if index == 0:
-            painter.fillPath(disc, QBrush(shadow))
-        elif index == 1:
-            painter.drawEllipse(rect.translated(-rect.width() // 3, 0))
-        elif index == 2:
-            painter.fillRect(
-                QRect(
-                    rect.left(),
-                    rect.top(),
-                    rect.width() // 2,
-                    rect.height(),
-                ),
-                shadow,
-            )
-        elif index == 3:
-            painter.drawEllipse(
-                QRect(
-                    rect.left() - rect.width() // 4,
-                    rect.top(),
-                    rect.width() // 2,
-                    rect.height(),
-                )
-            )
-        elif index == 5:
-            painter.drawEllipse(
-                QRect(
-                    rect.center().x() + rect.width() // 4,
-                    rect.top(),
-                    rect.width() // 2,
-                    rect.height(),
-                )
-            )
-        elif index == 6:
-            painter.fillRect(
-                QRect(
-                    rect.center().x(),
-                    rect.top(),
-                    rect.width() // 2 + 1,
-                    rect.height(),
-                ),
-                shadow,
-            )
-        elif index == 7:
-            painter.drawEllipse(rect.translated(rect.width() // 3, 0))
-        painter.restore()
-
-        painter.save()
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.setPen(QPen(QColor("#ffe9a7"), 3))
-        painter.drawEllipse(rect)
-        painter.restore()
 
     def _build_daily_card(self, phase: MoonPhase | None = None) -> QImage:
         """Render a shareable 1080px memory card without network or user data."""
@@ -3390,8 +3511,9 @@ class SpritePetWindow(QWidget):
         painter.drawText(72, 178, date_text)
         self._draw_daily_card_moon(
             painter,
-            QRect(840, 76, 54, 54),
+            QRect(770, 22, 142, 142),
             phase,
+            self._moon_snapshot(phase),
         )
         painter.drawText(
             QRect(905, 70, 105, 80),
@@ -3410,10 +3532,10 @@ class SpritePetWindow(QWidget):
             "curious",
             "read",
             "magic",
-            "moon",
             "star",
             "sit",
             "sleep",
+            "idle",
         )
         pose = poses[phase.index]
         sprite = self.sprite_images.get(
@@ -3425,7 +3547,9 @@ class SpritePetWindow(QWidget):
                 QPainter.RenderHint.SmoothPixmapTransform,
                 False,
             )
-            painter.drawImage(QRect(50, 220, 510, 510), sprite)
+            # 96 -> 480 is an exact 5x scale; every source pixel receives the
+            # same footprint instead of the uneven 5.3125x blocks used before.
+            painter.drawImage(QRect(65, 235, 480, 480), sprite)
 
         stat_font = self._daily_card_font(34, bold=True)
         painter.setFont(stat_font)
@@ -3570,6 +3694,29 @@ class SpritePetWindow(QWidget):
         dialog.setWindowIcon(self._app_icon)
         dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
         dialog.setAccessibleName("MoonShell 陪伴手账")
+        dialog.setStyleSheet(
+            """
+            QDialog { background: #090a1b; color: #f4eaff; }
+            QLabel { color: #fff3c7; }
+            QTextBrowser {
+                background: #11142f;
+                color: #f4eaff;
+                border: 1px solid #343a70;
+                border-radius: 12px;
+                padding: 8px;
+                selection-background-color: #5d5794;
+            }
+            QPushButton {
+                background: #282a53;
+                color: #fff3c7;
+                border: 1px solid #56588c;
+                border-radius: 9px;
+                padding: 8px 14px;
+            }
+            QPushButton:hover { background: #343765; border-color: #8d91c7; }
+            QPushButton:pressed { background: #1d2044; }
+            """
+        )
         self._companion_journal_dialog = dialog
 
         layout = QVBoxLayout(dialog)
@@ -3876,8 +4023,13 @@ class SpritePetWindow(QWidget):
         gift = self._claim_daily_gift()
         if gift is not None:
             pose, line, seconds = gift
-            self._set_action(pose, seconds, force=True)
-            self.say(line, 3.8, force=True)
+            self._play_action_sequence(
+                (
+                    ActionBeat(pose, seconds, line),
+                    ActionBeat("happy", 0.65),
+                ),
+                force=True,
+            )
             self._refresh_tray_status()
             return
 
@@ -3927,6 +4079,8 @@ class SpritePetWindow(QWidget):
         self._configure_window()
         if was_active:
             self.show()
+        self._moon_corner.set_always_on_top(checked)
+        self._sync_moon_corner()
         if not settings_saved:
             self._notify_persistence_failure(
                 "置顶设置仅在本次运行中生效，未能保存到本地。"
@@ -3940,6 +4094,7 @@ class SpritePetWindow(QWidget):
         if level == "low":
             self.walking = False
             self.walk_target_x = None
+            self.walk_timer.stop()
             self.update()
             self.say("好，我安静待着。", 1.8, force=True)
         else:
@@ -4097,14 +4252,17 @@ class SpritePetWindow(QWidget):
         self._shutdown_done = True
         for timer in (
             self.anim_timer,
+            self.walk_timer,
             self.phys_timer,
             self.hover_timer,
             self.state_timer,
             self._display_timer,
             self._teleport_timer,
+            self._action_sequence_timer,
             self._mask_timer,
             self._focus_timer,
             self._focus_status_timer,
+            self._moon_focus_timer,
             self._tray_watchdog,
         ):
             timer.stop()
@@ -4116,7 +4274,10 @@ class SpritePetWindow(QWidget):
             try:
                 self.monitor.shutdown()
             finally:
-                self.tray.hide()
+                try:
+                    self._moon_corner.shutdown()
+                finally:
+                    self.tray.hide()
 
     def _quit(self) -> None:
         self._shutdown()

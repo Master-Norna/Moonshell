@@ -2,16 +2,30 @@
 
 from pathlib import Path
 from pathlib import PurePosixPath
+import sys
 
 
 ROOT = Path(SPECPATH).resolve()
+sys.path.insert(0, str(ROOT))
+
+from pet.sprite_config import ACTIVE_SPRITES
+
+
+# Package only the reviewed runtime allowlist. Retired PNGs remain available in
+# the source tree for future art passes without leaking into the product build.
 ASSET_DATA = [
-    (str(ROOT / "assets" / "moonshell"), "assets/moonshell"),
+    (
+        str(ROOT / "assets" / "moonshell" / f"{name}.png"),
+        "assets/moonshell",
+    )
+    for name in ACTIVE_SPRITES
+]
+ASSET_DATA.append(
     (
         str(ROOT / "assets" / "branding" / "moonshell.ico"),
         "assets/branding",
-    ),
-]
+    )
+)
 
 a = Analysis(
     [str(ROOT / "main.py")],

@@ -21,9 +21,12 @@ RELEASE_DOCUMENTS = (
     ("README.md", "README.md"),
     ("LICENSE", "LICENSE"),
     ("THIRD_PARTY_NOTICES.md", "THIRD_PARTY_NOTICES.md"),
-    ("docs/daily-card-preview.png", "docs/daily-card-preview.png"),
-    ("docs/preview.png", "docs/preview.png"),
+    ("docs/VISUAL_LANGUAGE.md", "docs/VISUAL_LANGUAGE.md"),
+    ("docs/runtime-preview-v2.png", "docs/runtime-preview-v2.png"),
+    ("docs/v2_character_anchor.png", "docs/v2_character_anchor.png"),
     ("assets/_masters/README.md", "assets/_masters/README.md"),
+    ("assets/_masters/idle.png", "assets/_masters/idle.png"),
+    ("assets/moonshell/idle.png", "assets/moonshell/idle.png"),
 )
 ZIP_TIMESTAMP = (2026, 1, 1, 0, 0, 0)
 QA_NOTICE = (

@@ -308,18 +308,87 @@ class WindowInteractionTests(unittest.TestCase):
         try:
             w.falling = True
             w.phys_timer.start()
+            w.walking = True
+            w.walk_timer.start()
+            w._moon_focus_timer.start()
             w._toggle_enabled(False)
             self.assertFalse(w.isVisible())
+            self.assertFalse(w._moon_corner.isVisible())
             self.assertFalse(w.anim_timer.isActive())
             self.assertFalse(w.state_timer.isActive())
             self.assertFalse(w.phys_timer.isActive())
+            self.assertFalse(w.walk_timer.isActive())
+            self.assertFalse(w._moon_focus_timer.isActive())
             self.assertFalse(w.falling)
             self.assertFalse(w.monitor.active)
         finally:
             w._toggle_enabled(True)
         self.assertTrue(w.anim_timer.isActive())
         self.assertTrue(w.state_timer.isActive())
+        self.assertTrue(w._moon_corner.isVisible())
         self.assertTrue(w.monitor.active)
+
+    def test_corner_moon_reads_committed_gift_and_focus_state(self) -> None:
+        w = self.window
+        moon = w._moon_corner
+        w._state.last_gift_date = ""
+        w._state.moon_tokens = 0
+        with patch.object(moon, "pulse", wraps=moon.pulse) as pulse:
+            gift = w._claim_daily_gift()
+            self.assertIsNotNone(gift)
+            self.assertEqual(moon.snapshot.moon_tokens, 1)
+            pulse.assert_called_with("gift")
+
+            w._start_focus(25)
+            self.assertTrue(moon.snapshot.focus_active)
+            self.assertTrue(w._moon_focus_timer.isActive())
+            pulse.assert_called_with("focus")
+
+            w._complete_focus()
+            self.assertFalse(moon.snapshot.focus_active)
+            self.assertEqual(moon.snapshot.focus_minutes_completed, 25)
+            pulse.assert_called_with("focus_complete")
+
+    def test_failed_daily_gift_never_pulses_or_grows_corner_moon(self) -> None:
+        w = self.window
+        moon = w._moon_corner
+        w._state.last_gift_date = ""
+        w._state.moon_tokens = 0
+        w._sync_moon_corner()
+        with (
+            patch.object(w, "_save_state", return_value=False),
+            patch.object(moon, "pulse") as pulse,
+        ):
+            self.assertIsNone(w._claim_daily_gift())
+        self.assertEqual(w._state.moon_tokens, 0)
+        self.assertEqual(moon.snapshot.moon_tokens, 0)
+        pulse.assert_not_called()
+
+    def test_failed_focus_save_does_not_grow_or_pulse_corner_moon(self) -> None:
+        w = self.window
+        moon = w._moon_corner
+        w._state.focus_sessions_completed = 2
+        w._state.focus_minutes_completed = 50
+        w._sync_moon_corner()
+        w._start_focus(25)
+        with (
+            patch.object(w, "_save_state", return_value=False),
+            patch.object(moon, "pulse") as pulse,
+        ):
+            w._complete_focus()
+        self.assertEqual(w._state.focus_sessions_completed, 2)
+        self.assertEqual(w._state.focus_minutes_completed, 50)
+        self.assertEqual(moon.snapshot.focus_minutes_completed, 50)
+        pulse.assert_not_called()
+
+    def test_walk_position_is_not_advanced_by_the_slow_sprite_clock(self) -> None:
+        w = self.window
+        w.walking = True
+        w.walk_target_x = w.x() + 200
+        w._walk_pos_f = float(w.x())
+        with patch.object(w, "_step_walk") as step_walk:
+            w._on_anim()
+        step_walk.assert_not_called()
 
     def test_display_change_events_share_one_debounce_timer(self) -> None:
         w = self.window
@@ -1496,7 +1565,7 @@ class WindowInteractionTests(unittest.TestCase):
         ):
             self.assertTrue(w._maybe_moon_phase_reaction())
 
-        react.assert_called_once_with("moon", 2.8, "moon_phase", 6 * 3600)
+        react.assert_called_once_with("star", 2.8, "moon_phase", 6 * 3600)
         say.assert_called_once_with(
             "今天接近满月。抬头的时候，也许会想起我。",
             4.2,
@@ -1635,10 +1704,11 @@ class WindowInteractionTests(unittest.TestCase):
             ) = saved
             w._start_walk_toward = old_start_walk_toward  # type: ignore[method-assign]
 
-    def test_high_energy_long_stroll_can_become_a_dash(self) -> None:
+    def test_retired_dash_never_enters_the_active_walk_cycle(self) -> None:
         w = self.window
         saved_energy = w.mood.energy
         try:
+            self.assertNotIn("dash", w.sprite_images)
             w._snap_to_taskbar(initial=True)
             min_x, max_x = w._wander_x_bounds()
             w.move(min_x, w.y())
@@ -1646,7 +1716,7 @@ class WindowInteractionTests(unittest.TestCase):
             with patch("pet.pet_window.random.randint", return_value=max_x), \
                  patch("pet.pet_window.random.random", return_value=0.0):
                 self.assertTrue(w._start_walk())
-            self.assertTrue(w._dashing)
+            self.assertFalse(w._dashing)
             w._end_walk()
 
             w.move(min_x, w.y())
@@ -1920,10 +1990,9 @@ class WindowInteractionTests(unittest.TestCase):
             w.move(saved[2])
             w.update()
 
-    def test_side_glance_faces_cursor(self) -> None:
-        self.assertIn("look_side_flip", self.window.sprite_images)
-        self.assertEqual(self.window._side_glance_pose(10, 20), "look_side_flip")
-        self.assertEqual(self.window._side_glance_pose(30, 20), "look_side")
+    def test_retired_side_glance_is_not_loaded_at_runtime(self) -> None:
+        self.assertNotIn("look_side", self.window.sprite_images)
+        self.assertNotIn("look_side_flip", self.window.sprite_images)
 
     def test_tray_menu_does_not_expose_monitoring_ui(self) -> None:
         labels = [
@@ -2115,14 +2184,17 @@ class WindowInteractionTests(unittest.TestCase):
         w = self.window
         timers = (
             w.anim_timer,
+            w.walk_timer,
             w.phys_timer,
             w.hover_timer,
             w.state_timer,
             w._display_timer,
             w._teleport_timer,
+            w._action_sequence_timer,
             w._mask_timer,
             w._focus_timer,
             w._focus_status_timer,
+            w._moon_focus_timer,
             w._tray_watchdog,
         )
         for timer in timers:
@@ -2167,7 +2239,7 @@ class WindowInteractionTests(unittest.TestCase):
         ):
             self.assertFalse(w._maybe_moon_phase_reaction())
 
-        react.assert_called_once_with("moon", 2.8, "moon_phase", 6 * 3600)
+        react.assert_called_once_with("star", 2.8, "moon_phase", 6 * 3600)
         save_state.assert_not_called()
         self.assertEqual(w._next_moon_phase_check, 1_000.0 + 5 * 60)
         self.assertEqual(w._state.last_moon_event_key, "41")

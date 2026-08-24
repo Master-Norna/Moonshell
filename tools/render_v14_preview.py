@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from pet.sprite_config import (
-    OPTIONAL_SPRITES,
+    ACTIVE_SPRITES,
     SPRITE_SIZE,
     SPRITE_X,
     SPRITE_Y,
@@ -20,23 +20,12 @@ OUT = ROOT / "docs" / "v14_stage_preview.png"
 
 PHYSICAL_SCALE = 2
 
-FRAMES = [
-    ("idle", 0),
-    ("blink", 0),
-    ("happy", -2),
-    ("curious", 0),
-    ("sleepy", 0),
-    ("peek", 0),
-    ("walk_right_1", 0),
-    ("walk_right_2", 0),
-    ("walk_left_1", 0),
-    ("walk_left_2", 0),
-    ("notify", -2),
-    ("hover", -6),
-]
-# Optional expressive poses are appended when present so the preview shows the
-# full action set without ever failing if some are absent.
-FRAMES += [(n, 0) for n in OPTIONAL_SPRITES if (ASSETS / f"{n}.png").exists()]
+PREVIEW_Y_OFFSETS = {
+    "happy": -2,
+    "notify": -2,
+    "hover": -6,
+}
+FRAMES = [(name, PREVIEW_Y_OFFSETS.get(name, 0)) for name in ACTIVE_SPRITES]
 
 
 def nearest_stage(name: str, y_offset: int) -> Image.Image:

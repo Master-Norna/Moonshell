@@ -24,7 +24,18 @@ from pet import paths as app_paths
 from pet.logging_setup import configure_logging
 from pet.monitor import _MonitorWorker, machine_load
 from pet.settings import Settings
-from pet.sprite_config import OPTIONAL_SPRITES, REQUIRED_SPRITES, SPRITE_SIZE
+from pet.sprite_config import (
+    ACTIVE_SPRITES,
+    EXTRA_WALK_SPRITES,
+    FEATURE_SPRITES,
+    OPTIONAL_BASE_SPRITES,
+    OPTIONAL_SPRITES,
+    REQUIRED_SPRITES,
+    RETIRED_PAUSED_SPRITES,
+    RETIRED_REDO_SPRITES,
+    RETIRED_SPRITES,
+    SPRITE_SIZE,
+)
 from pet.state import PetState
 from pet.version import APP_VERSION
 from tools.check_build_environment import check_environment, parse_lock
@@ -38,7 +49,7 @@ from tools.package_release import package_release
 from tools.release_inputs import release_input_paths
 from tools.source_provenance import collect_source_provenance
 from tools.write_build_info import write_build_info
-from tools import check_sprites
+from tools import check_sprites, pixelize
 
 
 class MachineLoadTests(unittest.TestCase):
@@ -243,28 +254,60 @@ class DataPathTests(unittest.TestCase):
 
 
 class SpriteValidationTests(unittest.TestCase):
-    def test_required_sprites_exist(self) -> None:
-        root = Path(__file__).resolve().parents[1]
-        for name in REQUIRED_SPRITES:
-            self.assertTrue((root / "assets" / "moonshell" / f"{name}.png").exists())
+    def test_active_sprite_allowlist_is_complete_and_disjoint(self) -> None:
+        self.assertEqual(len(REQUIRED_SPRITES), 12)
+        self.assertEqual(len(OPTIONAL_BASE_SPRITES), 10)
+        self.assertEqual(len(FEATURE_SPRITES), 3)
+        self.assertEqual(len(EXTRA_WALK_SPRITES), 4)
+        self.assertEqual(
+            OPTIONAL_SPRITES,
+            (*OPTIONAL_BASE_SPRITES, *FEATURE_SPRITES, *EXTRA_WALK_SPRITES),
+        )
+        self.assertEqual(ACTIVE_SPRITES, (*REQUIRED_SPRITES, *OPTIONAL_SPRITES))
+        self.assertEqual(len(ACTIVE_SPRITES), 29)
+        self.assertEqual(len(set(ACTIVE_SPRITES)), len(ACTIVE_SPRITES))
 
-    def test_published_optional_sprites_are_complete(self) -> None:
+        self.assertEqual(len(RETIRED_PAUSED_SPRITES), 11)
+        self.assertEqual(len(RETIRED_REDO_SPRITES), 3)
+        self.assertEqual(
+            RETIRED_SPRITES,
+            (*RETIRED_PAUSED_SPRITES, *RETIRED_REDO_SPRITES),
+        )
+        self.assertEqual(len(set(RETIRED_SPRITES)), len(RETIRED_SPRITES))
+        self.assertTrue(set(ACTIVE_SPRITES).isdisjoint(RETIRED_SPRITES))
+
+    def test_active_and_retired_sprite_sources_remain_available(self) -> None:
         root = Path(__file__).resolve().parents[1]
-        sprite_dir = root / "assets" / "moonshell"
-        expected = set(REQUIRED_SPRITES) | set(OPTIONAL_SPRITES)
-        actual = {path.stem for path in sprite_dir.glob("*.png")}
-        missing = [
-            name
-            for name in OPTIONAL_SPRITES
-            if not (sprite_dir / f"{name}.png").exists()
-        ]
-        self.assertEqual(missing, [])
-        self.assertEqual(actual, expected)
+        expected_sources = set(ACTIVE_SPRITES) | set(RETIRED_SPRITES)
+        for relative in ("assets/_masters", "assets/moonshell"):
+            with self.subTest(relative=relative):
+                directory = root / relative
+                available = {path.stem for path in directory.glob("*.png")}
+                self.assertTrue(expected_sources.issubset(available))
+
+    def test_retired_sprites_are_not_runtime_or_pixelize_inputs(self) -> None:
+        runtime_inputs = set(REQUIRED_SPRITES) | set(OPTIONAL_SPRITES)
+        self.assertEqual(runtime_inputs, set(ACTIVE_SPRITES))
+        self.assertTrue(runtime_inputs.isdisjoint(RETIRED_SPRITES))
+        self.assertEqual(
+            tuple(path.stem for path in pixelize._frames()),
+            ACTIVE_SPRITES,
+        )
+
+    def test_pyinstaller_packages_the_active_allowlist_not_the_directory(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        spec = (root / "MoonShell.spec").read_text(encoding="utf-8")
+        self.assertIn("from pet.sprite_config import ACTIVE_SPRITES", spec)
+        self.assertIn("for name in ACTIVE_SPRITES", spec)
+        self.assertNotIn(
+            '(str(ROOT / "assets" / "moonshell"), "assets/moonshell")',
+            spec,
+        )
 
     def test_published_sprites_share_a_24_color_palette(self) -> None:
         root = Path(__file__).resolve().parents[1]
         colors: set[tuple[int, int, int]] = set()
-        for name in (*REQUIRED_SPRITES, *OPTIONAL_SPRITES):
+        for name in ACTIVE_SPRITES:
             with Image.open(root / "assets" / "moonshell" / f"{name}.png") as image:
                 rgba = image.convert("RGBA")
                 pixels = (
@@ -1082,6 +1125,9 @@ class ReleaseContractTests(unittest.TestCase):
                 root / "docs" / "image.png",
                 root / "docs" / "daily-card-preview.png",
                 root / "docs" / "preview.png",
+                root / "docs" / "VISUAL_LANGUAGE.md",
+                root / "docs" / "runtime-preview-v2.png",
+                root / "docs" / "v2_character_anchor.png",
                 root / "assets" / "moonshell" / "idle.png",
             )
             for path in files:
@@ -1093,8 +1139,11 @@ class ReleaseContractTests(unittest.TestCase):
             }
             self.assertNotIn("assets/_incoming/raw.png", relatives)
             self.assertNotIn("docs/image.png", relatives)
-            self.assertIn("docs/daily-card-preview.png", relatives)
-            self.assertIn("docs/preview.png", relatives)
+            self.assertNotIn("docs/daily-card-preview.png", relatives)
+            self.assertNotIn("docs/preview.png", relatives)
+            self.assertIn("docs/VISUAL_LANGUAGE.md", relatives)
+            self.assertIn("docs/runtime-preview-v2.png", relatives)
+            self.assertIn("docs/v2_character_anchor.png", relatives)
             self.assertIn("assets/moonshell/idle.png", relatives)
 
     def test_public_record_and_current_checkout_must_share_version_tag(self) -> None:
@@ -1231,8 +1280,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
             self.readme,
         )
         self.assertNotIn("unsigned-maintenance.zip", self.readme)
-        self.assertIn("docs/preview.png", self.readme)
-        self.assertIn("docs/daily-card-preview.png", self.readme)
+        self.assertIn("docs/runtime-preview-v2.png", self.readme)
+        self.assertIn("docs/VISUAL_LANGUAGE.md", self.readme)
+        self.assertNotIn("docs/preview.png", self.readme)
+        self.assertNotIn("docs/daily-card-preview.png", self.readme)
         self.assertIn("没有 Authenticode 代码签名", self.readme)
         self.assertIn("SmartScreen", self.readme)
 
@@ -1410,19 +1461,21 @@ class ReleaseArchiveTests(unittest.TestCase):
                 folder = f"MoonShell-{APP_VERSION}"
                 names = set(bundle.namelist())
                 self.assertIn(f"{folder}/README.md", names)
-                self.assertIn(f"{folder}/docs/preview.png", names)
                 self.assertIn(
-                    f"{folder}/docs/daily-card-preview.png",
+                    f"{folder}/docs/VISUAL_LANGUAGE.md",
                     names,
                 )
+                self.assertIn(f"{folder}/docs/runtime-preview-v2.png", names)
+                self.assertIn(f"{folder}/docs/v2_character_anchor.png", names)
+                self.assertIn(f"{folder}/assets/_masters/idle.png", names)
+                self.assertIn(f"{folder}/assets/moonshell/idle.png", names)
                 packaged_readme = bundle.read(
                     f"{folder}/README.md"
                 ).decode("utf-8")
-                self.assertIn("docs/preview.png", packaged_readme)
-                self.assertIn(
-                    "docs/daily-card-preview.png",
-                    packaged_readme,
-                )
+                self.assertIn("docs/runtime-preview-v2.png", packaged_readme)
+                self.assertIn("docs/VISUAL_LANGUAGE.md", packaged_readme)
+                self.assertNotIn("docs/preview.png", packaged_readme)
+                self.assertNotIn("docs/daily-card-preview.png", packaged_readme)
                 notice = f"MoonShell-{APP_VERSION}/UNSIGNED_RELEASE.txt"
                 text = bundle.read(notice).decode("utf-8")
             self.assertIn("not Authenticode-signed", text)

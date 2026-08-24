@@ -8,9 +8,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from pet.sprite_config import (
+    ACTIVE_SPRITES,
     LAYOUT_Y_OFFSETS,
-    OPTIONAL_SPRITES,
-    REQUIRED_SPRITES,
     SPRITE_X,
     SPRITE_Y,
     STAGE_SIZE,
@@ -37,9 +36,7 @@ def main() -> int:
     worst_left_margin = 999
     worst_right_margin = 999
 
-    names = list(REQUIRED_SPRITES)
-    names.extend(name for name in OPTIONAL_SPRITES if (ASSETS / f"{name}.png").exists())
-    for name in names:
+    for name in ACTIVE_SPRITES:
         for y_offset in LAYOUT_Y_OFFSETS:
             stage = compose_stage(name, y_offset)
             bbox = alpha_bbox(stage)
